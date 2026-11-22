@@ -1,0 +1,41 @@
+{
+  "name": "lepao",
+  "private": true,
+  "version": "1.0.0",
+  "description": "步道乐跑第三方 Web 客户端：后端 API + 手绘路径模拟跑步 + 提交",
+  "type": "module",
+  "author": "guiheng123",
+  "license": "SEE LICENSE IN LICENSE",
+  "homepage": "https://github.com/guiheng123/norunforme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/guiheng123/norunforme.git"
+  },
+  "scripts": {
+    "api": "node server/index.mjs --port 8787",
+    "api:lan": "node server/index.mjs --port 8787 --host 0.0.0.0",
+    "web": "npm --prefix web run dev",
+    "build": "npm --prefix web run build",
+    "start": "node server/index.mjs --port 8787",
+    "build:exe": "node build/make-exe.mjs",
+    "build:exe:fast": "node build/make-exe.mjs --skip-web",
+    "check:mojibake": "python scripts/check_mojibake.py",
+    "check:adb": "node scripts/adb-doctor.mjs",
+    "sync": "node scripts/login-sync.mjs",
+    "bridge": "node scripts/login-sync.mjs --serve",
+    "preflight": "node tools/preflight.mjs",
+    "sig:verify": "node tools/attest.mjs verify",
+    "notice:seal": "node tools/notice.mjs seal",
+    "notice:diff": "node tools/notice.mjs diff",
+    "prestart": "node tools/preflight.mjs --quiet",
+    "preapi": "node tools/preflight.mjs --quiet",
+    "preapi:lan": "node tools/preflight.mjs --quiet",
+    "preweb": "node tools/preflight.mjs --quiet",
+    "prebuild": "node tools/preflight.mjs --quiet",
+    "prebuild:exe": "node tools/preflight.mjs --quiet",
+    "postinstall": "node tools/preflight.mjs --quiet"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.2"
+  }
+}
