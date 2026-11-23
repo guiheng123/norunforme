@@ -19,7 +19,8 @@ export function hasFingerprint (s = {}) {
   return Boolean(
     String(s.mobileModel || '').trim() &&
       String(s.mobileOsVersion || '').trim() &&
-      String(s.mobileDeviceId ?? '').trim(),
+      s.mobileDeviceId !== undefined &&
+      s.mobileDeviceId !== null,
   )
 }
 
@@ -27,7 +28,6 @@ export function missingFingerprint (s = {}) {
   const miss = []
   if (!String(s.mobileModel || '').trim()) miss.push('mobileModel')
   if (!String(s.mobileOsVersion || '').trim()) miss.push('mobileOsVersion')
-  if (!String(s.mobileDeviceId ?? '').trim()) miss.push('mobileDeviceId（4.3.3 起必须是设备 UUID，空串会让服务端回 0 系统错误）')
   return miss
 }
 
@@ -96,7 +96,7 @@ export class LepaoClient {
     const trim = (v) => (v === undefined || v === null ? undefined : String(v).trim())
     const fp = {
       mobileModel: trim(session.mobileModel) || undefined,
-      mobileDeviceId: trim(session.mobileDeviceId),
+      mobileDeviceId: trim(session.mobileDeviceId) ?? '',
       mobileOsVersion: trim(session.mobileOsVersion) || undefined,
       buildId: trim(session.buildId) || undefined,
     }

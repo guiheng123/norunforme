@@ -18,7 +18,7 @@ import { buildRunTrack } from './lib/runtrack.mjs'
 import { createJob, jobs } from './lib/submit.mjs'
 import * as device from './lib/device.mjs'
 import { resolveRunZone, isVersionGate } from './lib/zone.mjs'
-import { loginFromDevice, verifySession, hydrate } from '../scripts/lib/auth.mjs'
+import { loginFromDevice, verifySession, hydrate, deviceIdCandidates, findAppUuids } from '../scripts/lib/auth.mjs'
 import { deviceInfo } from '../scripts/lib/adb.mjs'
 
 const ROOT = codeRoot()
@@ -211,9 +211,8 @@ function failUpstream (res, r, c) {
 
 function fingerprintMissing (s) {
   const miss = []
-  if (!String(s.mobileModel || '').trim()) miss.push('mobileModel')
-  if (!String(s.mobileOsVersion || '').trim()) miss.push('mobileOsVersion')
-  if (s.mobileDeviceId === undefined || s.mobileDeviceId === null) miss.push('mobileDeviceId')
+  if (!String(s?.mobileModel || '').trim()) miss.push('mobileModel')
+  if (!String(s?.mobileOsVersion || '').trim()) miss.push('mobileOsVersion')
   return miss
 }
 
@@ -286,7 +285,10 @@ async function syncFromDevice({ uid = 0, serial = '', fingerprint = {} } = {}) {
     term_id: r.session.term_id,
   }
   store.invalidate()
-  const merged = store.save(Object.fromEntries(Object.entries(keep).filter(([, v]) => v !== undefined && v !== '')))
+  const kept = Object.fromEntries(
+    Object.entries(keep).filter(([k, v]) => v !== undefined && (v !== '' || k === 'mobileDeviceId')),
+  )
+  const merged = store.save(kept)
   return { ok: true, session: merged, verified: !!r.verified, refreshed: !!r.refreshed, trace: r.trace || [] }
 }
 
@@ -343,6 +345,23 @@ const server = http.createServer(async (req, res) => {
         mobileModel: b.mobileModel !== undefined ? String(b.mobileModel).trim() : diskS.mobileModel,
         mobileDeviceId: b.mobileDeviceId !== undefined ? String(b.mobileDeviceId).trim() : diskS.mobileDeviceId,
         mobileOsVersion: b.mobileOsVersion !== undefined ? String(b.mobileOsVersion).trim() : diskS.mobileOsVersion,
+      }
+      if (!String(incoming.mobileDeviceId ?? '').trim()) {
+        let scanned = []
+        try {
+          const online = ((await device.devices()).list || []).filter((d) => d.state === 'device')
+          if (online.length) scanned = await findAppUuids({ serial: online[0].serial })
+        } catch {   }
+        const probe = deviceIdCandidates({
+          session: incoming,
+          cands: { deviceIds: scanned },
+          extra: [{ mobileDeviceId: diskS.mobileDeviceId }],
+        }).map((c) => c.value)
+        const r = await verifySession(
+          { ...diskS, ...incoming, token: String(b.token).trim(), uid: num(b.uid) },
+          { deviceIds: probe },
+        )
+        if (r.ok && r.session) incoming.mobileDeviceId = r.session.mobileDeviceId
       }
       const gate = failNoFingerprint(res, incoming)
       if (gate) return gate

@@ -91,11 +91,7 @@ export function hasSession(): boolean {
 
 export function hasFingerprint(input?: Partial<AppSettings> | null): boolean {
   const s = input ?? store.settings
-  return Boolean(
-    String(s.mobileModel ?? '').trim() &&
-      String(s.mobileOsVersion ?? '').trim() &&
-      String(s.mobileDeviceId ?? '').trim(),
-  )
+  return Boolean(String(s.mobileModel ?? '').trim() && String(s.mobileOsVersion ?? '').trim())
 }
 
 export function missingFingerprint(input?: Partial<AppSettings> | null): string[] {
@@ -103,7 +99,6 @@ export function missingFingerprint(input?: Partial<AppSettings> | null): string[
   const miss: string[] = []
   if (!String(s.mobileModel ?? '').trim()) miss.push('mobileModel')
   if (!String(s.mobileOsVersion ?? '').trim()) miss.push('mobileOsVersion')
-  if (!String(s.mobileDeviceId ?? '').trim()) miss.push('mobileDeviceId')
   return miss
 }
 

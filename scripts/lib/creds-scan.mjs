@@ -217,6 +217,25 @@ export function extractFromBuffer(buf, opts = {}) {
     deviceIds.push({ value: v, key: 'app-device-id', offset: m.index, source, ctx: ctxOf(m.index), confidence: 'app' })
   }
 
+  const ANY_UUID_RE = /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/gi
+  for (const m of text.matchAll(ANY_UUID_RE)) {
+    const v = m[0].toLowerCase()
+    if (/^00000000-0000-0000-0000-000000000000$/.test(v)) continue
+    if (deviceIds.some((d) => String(d.value).toLowerCase() === v)) continue
+    const ctx = (isUtf16 ? ctxOf(m.index) : ctxOfBytes(m.index)) || ''
+    if (!/device|uuid|udid|oaid|idfa|mobile|finger|dev_?id/i.test(ctx)) continue
+    deviceIds.push({ value: v, key: 'uuid-ctx', offset: m.index, source, ctx, confidence: 'app' })
+  }
+
+  const squashed = Buffer.from(buf.filter((b) => b !== 0)).toString('latin1')
+  for (const m of squashed.matchAll(ANY_UUID_RE)) {
+    const v = m[0].toLowerCase()
+    if (/^00000000-0000-0000-0000-000000000000$/.test(v)) continue
+    if (deviceIds.some((d) => String(d.value).toLowerCase() === v)) continue
+    if (!/device|uuid|udid|oaid|idfa|mobile|finger|dev_?id/i.test(squashed.slice(Math.max(0, m.index - 40), m.index + 40))) continue
+    deviceIds.push({ value: v, key: 'uuid-raw', offset: m.index, source, confidence: 'app' })
+  }
+
   const rank = { key: 0, raw: 1, 'raw-lower': 2 }
   tokens.sort((a, b) => (rank[a.confidence] ?? 9) - (rank[b.confidence] ?? 9))
 

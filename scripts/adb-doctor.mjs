@@ -1,18 +1,6 @@
-import { execFile } from 'node:child_process'
-import { existsSync } from 'node:fs'
 import { resolve } from 'node:path'
-import { adbSelfCheck, listDevices, hasRoot, deviceInfo, currentActivity, grepFiles, shellRoot, PKG, DEFAULT_ADB_CANDIDATES } from './lib/adb.mjs'
-
-async function detectAppDeviceId (adb, serial) {
-  const g = await grepFiles(`/data/data/${PKG}`, '00000000-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}', { adb, serial, root: true })
-  if (!g.ok || !g.files.length) return ''
-  const r = await shellRoot(
-    `grep -rhoaE '00000000-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' /data/data/${PKG} 2>/dev/null | grep -v '00000000-0000-0000-0000-000000000000' | sort | uniq -c | sort -rn | head -1`,
-    { adb, serial, timeout: 120000 },
-  )
-  const m = /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i.exec(String(r.stdout || ''))
-  return m ? m[1] : ''
-}
+import { adbSelfCheck, listDevices, hasRoot, deviceInfo, currentActivity, PKG } from './lib/adb.mjs'
+import { findAppUuids } from './lib/auth.mjs'
 
 const argv = process.argv.slice(2)
 const arg = (n, d = null) => {
@@ -56,8 +44,9 @@ if (!sc.found || !sc.ok) {
     const act = await currentActivity({ adb: explicit, serial: dev.serial })
     lines.push(`\n[4] 这台设备`)
     lines.push(`    root：${root ? '有（可直接读 /data/data）' : '无（只能走 logcat / 外部存储）'}`)
-    const devId = await detectAppDeviceId(explicit, dev.serial)
-    lines.push(`    指纹（服务端按它定位会话）：mobileModel=${info.mobileModel || '(缺)'} mobileOsVersion=${info.mobileOsVersion || '(缺)'} mobileDeviceId=${devId || "''（没找到，见下）"}`)
+    const ids = await findAppUuids({ adb: explicit, serial: dev.serial })
+    lines.push(`    指纹（服务端按它定位会话）：mobileModel=${info.mobileModel || '(缺)'} mobileOsVersion=${info.mobileOsVersion || '(缺)'} mobileDeviceId=${ids[0]?.value || "''（没找到，见下）"}`)
+    if (ids.length > 1) lines.push(`    其它 UUID 候选：${ids.slice(1, 4).map((u) => `${u.value}(×${u.hits})`).join('  ')}`)
     lines.push(`    android_id（不是 mobileDeviceId，填它必 101）：${info.androidId || '-'}`)
     lines.push(`    乐跑 App：${act?.startsWith(PKG) ? '在前台' : act ? `不在前台（当前 ${act}）` : '无法判断'}`)
   }

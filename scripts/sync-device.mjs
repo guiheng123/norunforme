@@ -4,6 +4,7 @@ import path from 'node:path'
 import { execFile } from 'node:child_process'
 import { parseMmkv, mmkvLast, valueAsNumber } from './lib/mmkv.mjs'
 import { resolveAdb } from './lib/adb.mjs'
+import { readRememberedFingerprint, rememberFingerprint } from './lib/auth.mjs'
 import { dataRoot } from '../server/lib/paths.mjs'
 import { LepaoClient } from '../server/lib/lp-client.mjs'
 
@@ -78,19 +79,21 @@ const buildId = await getprop('ro.build.id')
 const androidId = (await sh('settings get secure android_id')).toString('utf8').trim()
 
 async function detectDeviceId () {
-  const cmd = `grep -ra -o -E '00000000-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' /data/data/${PKG}/ 2>/dev/null`
+  const pat = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
+  const cmd = `grep -ra -o -i -E '${pat}' /data/data/${PKG}/ 2>/dev/null`
   let r = await run(['-s', serial, 'shell', cmd])
-  let text = r.out.toString('utf8')
-  if (!/00000000-[0-9a-f]{4}/i.test(text)) {
+  let text = r.out.toString('utf8').toLowerCase()
+  if (!/^[0-9a-f]{8}-/m.test(text)) {
     r = await run(['-s', serial, 'shell', `su -c "${cmd.replace(/"/g, '\\"')}"`])
-    text = r.out.toString('utf8')
+    text = r.out.toString('utf8').toLowerCase()
   }
   const counts = new Map()
-  for (const m of text.matchAll(/00000000-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/g)) {
+  for (const m of text.matchAll(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/g)) {
     if (/^00000000-0000-0000-0000-000000000000$/.test(m[0])) continue
     counts.set(m[0], (counts.get(m[0]) || 0) + 1)
   }
-  const best = [...counts.entries()].sort((a, b) => b[1] - a[1])[0]
+  const best = [...counts.entries()]
+    .sort((a, b) => b[1] - a[1] || Number(/^00000000-/.test(b[0])) - Number(/^00000000-/.test(a[0])))[0]
   return best ? { value: best[0], hits: best[1] } : null
 }
 
@@ -101,11 +104,13 @@ let diskDeviceId = ''
 try {
   const disk = JSON.parse(fs.readFileSync(path.join(dataRoot(), 'data', 'session.json'), 'utf8').replace(/^\uFEFF/, ''))
   const v = String(disk.mobileDeviceId || '').trim()
-  if (/^00000000-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v) && !/^00000000-0000-0000-0000-000000000000$/.test(v)) {
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v) && !/^00000000-0000-0000-0000-000000000000$/.test(v)) {
     diskDeviceId = v
     if (detected?.value !== v) console.log(`  沿用磁盘上已验证过的设备 id：${v}`)
   }
 } catch {   }
+
+const remembered = readRememberedFingerprint()
 
 const pad = (s) => String(s).padStart(8, '0')
 const androidUuid = androidId.length === 16
@@ -113,6 +118,9 @@ const androidUuid = androidId.length === 16
   : ''
 const candidates = [
   detected ? { label: 'App 数据目录里的 UUID', mobileDeviceId: detected.value } : null,
+  remembered.mobileDeviceId && remembered.mobileDeviceId !== detected?.value
+    ? { label: '本机记住的 UUID', mobileDeviceId: remembered.mobileDeviceId }
+    : null,
   diskDeviceId && diskDeviceId !== detected?.value ? { label: '磁盘上验证过的 UUID', mobileDeviceId: diskDeviceId } : null,
   { label: '空串', mobileDeviceId: '' },
   { label: 'android_id 原样', mobileDeviceId: androidId },
@@ -161,5 +169,6 @@ const session = {
 }
 fs.mkdirSync(path.dirname(FILE), { recursive: true })
 fs.writeFileSync(FILE, JSON.stringify(session, null, 2))
+rememberFingerprint(session)
 console.log(`已写入 ${FILE}`)
 console.log(`指纹：${session.mobileModel} / ${session.mobileDeviceId || "''"} / ${session.mobileOsVersion}`)

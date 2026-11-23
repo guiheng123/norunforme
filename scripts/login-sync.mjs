@@ -1,7 +1,7 @@
 import { createServer } from 'node:http'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
-import { loginFromDevice, verifySession, hydrate, probeDevice, scanAllHex } from './lib/auth.mjs'
+import { loginFromDevice, verifySession, hydrate, probeDevice, scanAllHex, rememberFingerprint } from './lib/auth.mjs'
 import { createAuthHandler } from './lib/local-server.mjs'
 import { installExitShim } from './lib/exit.mjs'
 
@@ -31,6 +31,7 @@ function writeSession(session) {
   ensureDir(SESSION_FILE)
   writeFileSync(CREDS, j(session) + '\n', 'utf8')
   writeFileSync(SESSION_FILE, j({ ...session, saved_at: new Date().toISOString() }) + '\n', 'utf8')
+  rememberFingerprint(session)
 }
 
 async function syncOnce() {

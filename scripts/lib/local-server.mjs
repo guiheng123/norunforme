@@ -1,5 +1,5 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
-import { loginFromDevice, verifySession, hydrate } from './auth.mjs'
+import { loginFromDevice, verifySession, hydrate, rememberFingerprint } from './auth.mjs'
 import { listDevices, hasRoot, launchApp, currentActivity, PKG, connectHost, deviceInfo } from './adb.mjs'
 
 const CORS = {
@@ -52,6 +52,7 @@ export function createAuthHandler(opts = {}) {
     const payload = { ...session, saved_at: new Date().toISOString() }
     writeFileSync(credsFile, j(session) + '\n', 'utf8')
     writeFileSync(sessionFile, j(payload) + '\n', 'utf8')
+    rememberFingerprint(session)
     latest = payload
   }
 

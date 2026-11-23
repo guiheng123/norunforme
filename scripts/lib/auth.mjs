@@ -1,5 +1,6 @@
-import { readdirSync, readFileSync, statSync } from 'node:fs'
-import { join } from 'node:path'
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { dataRoot } from '../../server/lib/paths.mjs'
 import { makeClient } from './track-analysis.mjs'
 import { extractFromBuffer, mergeCandidates, buildCombo } from './creds-scan.mjs'
 import { parseMmkv, mmkvLast, valueAsNumber } from './mmkv.mjs'
@@ -32,6 +33,7 @@ const EXTERNAL_DIRS = [
   '/sdcard/LpTiyu',
 ]
 const MAX_FILE = 512 * 1024
+const MAX_DIR_FILE = 8 * 1024 * 1024
 const MAX_FILES = 60
 const SKIP_EXT = /\.(png|jpe?g|webp|gif|so|dex|apk|mp4|ttf|otf|zip|jar|dat|bin|vdata|prof)$/i
 
@@ -80,6 +82,127 @@ function pickFingerprint(s) {
   }
 }
 
+export const ZERO_DEVICE_ID = '00000000-0000-0000-0000-000000000000'
+export const DEVICE_UUID_RE = /^00000000-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+export const ANY_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+const ANDROID_ID_RE = /^[0-9a-f]{16}$/i
+const UUID_GREP = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
+
+export function fingerprintFile() {
+  return join(dataRoot(), 'data', 'device.json')
+}
+
+export function readRememberedFingerprint() {
+  const file = fingerprintFile()
+  if (!existsSync(file)) return {}
+  try {
+    const j = JSON.parse(readFileSync(file).toString('utf8').replace(/^\uFEFF/, ''))
+    return j && typeof j === 'object' ? j : {}
+  } catch {
+    return {}
+  }
+}
+
+export function rememberFingerprint(fp = {}) {
+  const next = { ...readRememberedFingerprint() }
+  for (const k of ['mobileModel', 'mobileDeviceId', 'mobileOsVersion', 'buildId']) {
+    if (fp[k] === undefined || fp[k] === null) continue
+    const v = String(fp[k]).trim()
+    if (v) next[k] = v
+  }
+  if (!next.mobileDeviceId && !next.mobileModel) return next
+  next.saved_at = new Date().toISOString()
+  try {
+    mkdirSync(dirname(fingerprintFile()), { recursive: true })
+    writeFileSync(fingerprintFile(), JSON.stringify(next, null, 2))
+  } catch {
+  }
+  return next
+}
+
+export function androidIdToUuid(androidId) {
+  const v = String(androidId || '').trim()
+  if (!ANDROID_ID_RE.test(v)) return ''
+  return `${v.slice(0, 8)}-${v.slice(8, 12)}-${v.slice(12, 16)}-0000-000000000000`
+}
+
+export function deviceIdCandidates({ session, cands, info, extra } = {}) {
+  const out = []
+  const seen = new Set()
+  const add = (raw, why, { allowZero = false, allowEmpty = false } = {}) => {
+    if (raw === undefined || raw === null) return
+    const v = String(raw).trim()
+    if (!v && !allowEmpty) return
+    if (v && !ANY_UUID_RE.test(v) && !ANDROID_ID_RE.test(v)) return
+    if (v === ZERO_DEVICE_ID && !allowZero) return
+    const key = v.toLowerCase()
+    if (seen.has(key)) return
+    seen.add(key)
+    out.push({ value: v, why })
+  }
+  add(normalizeSession(session || {}).mobileDeviceId, '会话里已有的值', { allowEmpty: true })
+  for (const d of cands?.deviceIds ?? []) add(d?.value, 'App 数据里扫到的')
+  for (const f of [].concat(extra || [])) {
+    add(f && typeof f === 'object' ? f.mobileDeviceId : f, '外部给定')
+  }
+  add(readRememberedFingerprint().mobileDeviceId, '本机记住的值')
+  add('', '空串（老版本 App 形态）', { allowEmpty: true })
+  add(androidIdToUuid(info?.androidId), 'android_id 推出的 UUID 形态')
+  add(ZERO_DEVICE_ID, '固定 UUID 兜底', { allowZero: true })
+  return out
+}
+
+const uuidScanCache = new Map()
+
+export async function findAppUuids({ adb, serial, refresh = false } = {}) {
+  const cacheKey = String(serial || process.env.LP_ADB_DEVICE || '-')
+  const cached = uuidScanCache.get(cacheKey)
+  if (!refresh && cached && (cached.rows.length ? Date.now() - cached.at < 300000 : Date.now() - cached.at < 20000)) {
+    return cached.rows
+  }
+  const base = `/data/data/${PKG}`
+  const rows = []
+  const collect = (text) => {
+    for (const line of String(text || '').split(/\r?\n/)) {
+      const m = /^\s*(\d+)\s+([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\s*$/i.exec(line)
+      if (!m) continue
+      const v = m[2].toLowerCase()
+      if (v === ZERO_DEVICE_ID) continue
+      if (rows.some((x) => x.value === v)) continue
+      rows.push({ value: v, hits: Number(m[1]) })
+    }
+  }
+  const cmd = `grep -rhoaE '${UUID_GREP}' ${base} 2>/dev/null | tr 'A-F' 'a-f' | sort | uniq -c | sort -rn | head -10`
+  const viaRoot = await shellRoot(cmd, { adb, serial, timeout: 120000 })
+  collect(viaRoot.stdout)
+  if (!rows.length) {
+    const ls = [
+      `${base}/app_webview/Local\\ Storage/leveldb/*`,
+      `${base}/app_webview/Default/Local\\ Storage/leveldb/*`,
+      `${base}/app_webview/*/Local\\ Storage/leveldb/*`,
+    ].join(' ')
+    const cmd16 = `cat ${ls} 2>/dev/null | tr -d '\\000' | grep -aoiE '${UUID_GREP}' | tr 'A-F' 'a-f' | sort | uniq -c | sort -rn | head -10`
+    const via16 = await shellRoot(cmd16, { adb, serial, timeout: 90000 })
+    collect(via16.stdout)
+  }
+  if (!rows.length) {
+    const inner = `run-as ${PKG} sh -c "grep -rhoaE '${UUID_GREP}' . 2>/dev/null | tr 'A-F' 'a-f' | sort | uniq -c | sort -rn | head -10"`
+    const viaRunAs = await runAdb(serial ? ['-s', String(serial), 'shell', inner] : ['shell', inner], {
+      adb,
+      encoding: 'utf8',
+      timeout: 60000,
+    })
+    collect(viaRunAs.stdout)
+  }
+  const sorted = sortByHits(rows)
+  uuidScanCache.set(cacheKey, { at: Date.now(), rows: sorted })
+  return sorted
+}
+
+function sortByHits(rows) {
+  return [...rows].sort((a, b) => b.hits - a.hits)
+}
+
 function fingerprintVariants(session, extra = []) {
   const cur = normalizeSession(session)
   const given = Array.isArray(extra) ? extra : [extra]
@@ -99,39 +222,67 @@ function fingerprintVariants(session, extra = []) {
     })
 }
 
-export async function verifySession(session, { retryFingerprint = true, fingerprints } = {}) {
+const absentDeviceId = (v) => v === undefined || v === null || String(v).trim() === ''
+
+export async function verifySession(session, { retryFingerprint = true, fingerprints, deviceIds } = {}) {
   const s0 = normalizeSession(session)
   const miss = missingFingerprint(s0)
-  if (miss.length) {
-    return {
-      ok: false,
-      status: -4,
-      needFingerprint: true,
-      missing: miss,
-      info: `缺少设备指纹：${miss.join('、')}。服务端按 (token, uid, 设备指纹) 定位会话，缺失必然 101，请填写后再试。`,
+  const hard = miss.filter((k) => !k.startsWith('mobileDeviceId'))
+  const missingAll = absentDeviceId(s0.mobileDeviceId) || hard.length ? [...hard, 'mobileDeviceId'] : []
+  const info4 = `缺少设备指纹：${missingAll.join('、')}。服务端按 (token, uid, 设备指纹) 定位会话，缺失必然 101，请填写后再试。`
+  if (hard.length) {
+    return { ok: false, status: -4, needFingerprint: true, missing: missingAll, info: info4, session: s0 }
+  }
+
+  const plan = []
+  const seen = new Set()
+  const push = (s, why) => {
+    if (!s) return
+    const key = `${s.mobileModel}|${s.mobileDeviceId}|${s.mobileOsVersion}`
+    if (seen.has(key)) return
+    seen.add(key)
+    plan.push({ s, why })
+  }
+  if (!absentDeviceId(s0.mobileDeviceId)) push(s0, '当前')
+  if (retryFingerprint) {
+    for (const d of deviceIdCandidates({
       session: s0,
+      extra: [].concat(fingerprints || [], deviceIds || []),
+    })) {
+      push({ ...s0, mobileDeviceId: d.value }, d.why)
     }
+    for (const v of fingerprintVariants(s0, fingerprints)) push(v, '指纹变体')
   }
-  const call = makeClient(s0)
-  try {
-    const r = await call('User/myZone')
-    const status = Number(r.status)
-    if (status === 1) return { ok: true, status, info: r.info ?? '', data: r.data, session: s0 }
-    if (String(r.info || '').includes('版本过低')) {
-      return { ok: false, status: 0, gate: 'version', info: r.info, data: r.data, session: s0 }
-    }
-    if (status === 101 && retryFingerprint) {
-      for (const v of fingerprintVariants(s0, fingerprints)) {
-        const r2 = await makeClient(v)('User/myZone')
-        if (Number(r2.status) === 1) {
-          return { ok: true, status: 1, info: '', data: r2.data, session: v, retried: true }
-        }
+  if (!plan.length) push(s0, '当前')
+
+  let last = null
+  for (const { s, why } of plan.slice(0, 12)) {
+    try {
+      const r = await makeClient(s)('User/myZone')
+      const status = Number(r.status)
+      if (status === 1) {
+        const resolved = why !== '当前'
+        if (resolved) rememberFingerprint(s)
+        return { ok: true, status, info: r.info ?? '', data: r.data, session: s, retried: resolved, via: why }
       }
+      if (String(r.info || '').includes('版本过低')) {
+        return { ok: false, status: 0, gate: 'version', info: r.info, data: r.data, session: s }
+      }
+      last = { ok: false, status, info: r.info ?? '', data: r.data, session: s }
+    } catch (e) {
+      last = { ok: false, status: -1, info: e.message, session: s }
     }
-    return { ok: false, status, info: r.info ?? '', data: r.data, session: s0 }
-  } catch (e) {
-    return { ok: false, status: -1, info: e.message, session: s0 }
   }
+
+  const out = { ...(last || { ok: false, status: -4, session: s0 }) }
+  if (absentDeviceId(s0.mobileDeviceId) && out.status !== 102) {
+    out.ok = false
+    out.status = -4
+    out.needFingerprint = true
+    out.missing = ['mobileDeviceId']
+    out.info = info4
+  }
+  return out
 }
 
 export async function refreshSession(session) {
@@ -240,7 +391,7 @@ export function collectFromDir(dir) {
       } catch {
         continue
       }
-      if (size === 0 || size > MAX_FILE) continue
+      if (size === 0 || size > MAX_DIR_FILE) continue
       if (results.length >= MAX_FILES) return
       try {
         results.push(extractFromBuffer(readFileSync(p), { source: p }))
@@ -326,6 +477,20 @@ export async function collectFromDevice({ adb, serial, host } = {}) {
   log(`设备：${serial2}　root：${root ? '有' : '无'}`)
 
   const info = await deviceInfo({ adb, serial: serial2 })
+
+  const appUuids = await findAppUuids({ adb, serial: serial2 }).catch(() => [])
+  if (appUuids.length) {
+    log(`设备 UUID 候选 ${appUuids.length} 个：${appUuids.slice(0, 3).map((u) => u.value).join(' / ')}`)
+    out.push({
+      source: '<uuid-scan>',
+      tokens: [],
+      refreshes: [],
+      uids: [],
+      studentNums: [],
+      schoolIds: [],
+      deviceIds: appUuids.map((u) => ({ value: u.value, key: 'uuid-scan', hits: u.hits })),
+    })
+  }
 
   if (root) {
     let targets = []
@@ -631,27 +796,28 @@ export async function loginFromDevice(opts = {}) {
     mobileOsVersion: opts.mobileOsVersion != null ? String(opts.mobileOsVersion).trim() : undefined,
   }
 
-  const DEVICE_UUID_RE = /^00000000-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
-  const appDeviceId =
-    (cands.deviceIds ?? []).map((d) => String(d.value)).find((v) => DEVICE_UUID_RE.test(v)) || ''
-  const deviceFp = info
-    ? {
-        mobileModel: info.mobileModel || undefined,
-        mobileOsVersion: info.mobileOsVersion || undefined,
-        mobileDeviceId: appDeviceId || '',
-      }
-    : {}
+  const remembered = readRememberedFingerprint()
+  const appDeviceId = (cands.deviceIds ?? [])
+    .map((d) => String(d.value))
+    .find((v) => ANY_UUID_RE.test(v) || ANDROID_ID_RE.test(v)) || ''
+  const firstNonEmpty = (...vals) => {
+    for (const v of vals) {
+      if (v === undefined || v === null) continue
+      const s = String(v).trim()
+      if (s) return s
+    }
+    return undefined
+  }
 
   const session = {
     token: combo.token,
     uid: combo.uid,
     school_id: schoolId,
     student_num: studentNum,
-    ...Object.fromEntries(Object.entries(deviceFp).filter(([, v]) => v)),
-    ...Object.fromEntries(
-      Object.entries({ mobileDeviceId: appDeviceId, ...fpGiven })
-        .filter(([, v]) => v !== undefined),
-    ),
+    mobileModel: firstNonEmpty(fpGiven.mobileModel, info?.mobileModel, remembered.mobileModel) ?? '',
+    mobileDeviceId: firstNonEmpty(fpGiven.mobileDeviceId, appDeviceId, remembered.mobileDeviceId) ?? '',
+    mobileOsVersion: firstNonEmpty(fpGiven.mobileOsVersion, info?.mobileOsVersion, remembered.mobileOsVersion) ?? '',
+    ...(firstNonEmpty(info?.buildId, remembered.buildId) ? { buildId: firstNonEmpty(info?.buildId, remembered.buildId) } : {}),
     refresh_token: cands.refreshes[0]?.value || undefined,
     ...(meta.run_zone_id ? { run_zone_id: String(meta.run_zone_id) } : {}),
     ...(meta.term_id ? { term_id: String(meta.term_id) } : {}),
@@ -672,17 +838,19 @@ export async function loginFromDevice(opts = {}) {
 
   const altFps = [
     ...(Array.isArray(opts.fingerprints) ? opts.fingerprints : opts.fingerprints ? [opts.fingerprints] : []),
-    ...(cands.deviceIds ?? [])
-      .map((d) => String(d.value))
-      .filter((v) => /^00000000-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v))
-      .slice(0, 3)
-      .map((v) => ({ mobileDeviceId: v })),
     { mobileDeviceId: '' },
     ...(cands.deviceIds ?? []).slice(0, 3).map((d) => ({ mobileDeviceId: d.value })),
   ]
 
+  const idCandidates = deviceIdCandidates({
+    session,
+    cands,
+    info,
+    extra: [fpGiven.mobileDeviceId, remembered.mobileDeviceId, ...(opts.fingerprints ? [].concat(opts.fingerprints) : [])],
+  }).map((c) => c.value)
+
   const attempt = async (sess) => {
-    const v = await verifySession(sess, { fingerprints: altFps })
+    const v = await verifySession(sess, { fingerprints: altFps, deviceIds: idCandidates })
     const fp = v.session
       ? `${v.session.mobileModel}/${v.session.mobileDeviceId || '-'}/a${v.session.mobileOsVersion}`
       : ''
@@ -692,13 +860,17 @@ export async function loginFromDevice(opts = {}) {
 
   let v = await attempt(session)
   if (v.ok) {
-    const picked = v.session ? { ...session, ...pickFingerprint(v.session) } : session
+    const picked = { ...session, ...(v.session ? pickFingerprint(v.session) : {}) }
+    rememberFingerprint(picked)
     const full = await hydrate(picked, meta)
     return { ok: true, session: full, verified: true, trace: [...trace, ...(v.retried ? [`指纹已确定：${JSON.stringify(pickFingerprint(v.session))}`] : [])], cands, combo, device }
   }
 
   if (v.needFingerprint) {
-    return { ok: false, verified: false, status: v.status, needFingerprint: true, missing: v.missing, info: v.info, session, trace, cands, combo, device }
+    if (idCandidates.length > 1) {
+      trace.push(`已轮试 ${idCandidates.length} 个 mobileDeviceId 候选（含扫到的 UUID 与本机记住的值）都没通过，需要在登录页填 App 真实发出去的那个设备 UUID`)
+    }
+    return { ok: false, verified: false, status: v.status, needFingerprint: true, missing: v.missing, info: v.info, session: { ...session, mobileDeviceId: v.session?.mobileDeviceId ?? session.mobileDeviceId }, trace, cands, combo, device }
   }
 
   let refreshedToken = ''
@@ -721,7 +893,7 @@ export async function loginFromDevice(opts = {}) {
       }
       refreshedToken = rf.token
       const s2 = { ...session, token: rf.token, refresh_token: rf.refresh_token }
-      const v2 = await verifySession(s2, { fingerprints: altFps })
+      const v2 = await verifySession(s2, { fingerprints: altFps, deviceIds: idCandidates })
       trace.push(`  续期成功 ${String(c.refresh).slice(0, 8)}… → token=${String(rf.token).slice(0, 8)}… 校验 ${v2.status}`)
       if (v2.ok) {
         const full = await hydrate(s2, meta)
@@ -743,7 +915,7 @@ export async function loginFromDevice(opts = {}) {
     }
     trace.push(`按序轮试剩余 ${queue.length} 颗候选（含裸串）`)
     for (const t of queue) {
-      const s2 = { ...session, token: t.value }
+      const s2 = { ...session, token: t.value, mobileDeviceId: v.session?.mobileDeviceId ?? session.mobileDeviceId }
       const v2 = await verifySession(s2, { retryFingerprint: false })
       const mark = v2.ok ? '✓' : '✗'
       trace.push(`  ${mark} ${t.value.slice(0, 8)}…（${t.confidence}${t.key ? '/' + t.key : ''}）：${v2.status} ${String(v2.info ?? '').slice(0, 18)}`)

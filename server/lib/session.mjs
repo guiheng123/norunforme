@@ -18,6 +18,16 @@ const FINGERPRINT_KEYS = new Set(['mobileModel', 'mobileDeviceId', 'mobileOsVers
 const DROP = new Set(['version', 'version_name'])
 
 let cache = null
+let cacheStamp = ''
+
+function fileStamp () {
+  try {
+    const st = fs.statSync(FILE)
+    return `${st.mtimeMs}:${st.size}`
+  } catch {
+    return 'missing'
+  }
+}
 
 function readJson (file) {
   const raw = fs.readFileSync(file)
@@ -28,7 +38,8 @@ function readJson (file) {
 }
 
 export function load () {
-  if (cache) return cache
+  const stamp = fileStamp()
+  if (cache && stamp === cacheStamp) return cache
   let disk = {}
   try {
     disk = readJson(FILE)
@@ -48,6 +59,7 @@ export function load () {
     clean[k] = typeof v === 'string' ? v.trim() : v
   }
   cache = { ...EMPTY, ...clean }
+  cacheStamp = stamp
   return cache
 }
 
@@ -63,6 +75,7 @@ export function save (patch) {
   cache = { ...merged, saved_at: new Date().toISOString() }
   fs.mkdirSync(DATA_DIR, { recursive: true })
   fs.writeFileSync(FILE, JSON.stringify(cache, null, 2))
+  cacheStamp = fileStamp()
   return cache
 }
 
@@ -85,6 +98,7 @@ function removeSessionFile () {
 
 export function clear () {
   cache = { ...EMPTY }
+  cacheStamp = 'missing'
   const file = removeSessionFile()
   try {
     for (const name of fs.readdirSync(DATA_DIR)) {
@@ -100,6 +114,7 @@ export function clear () {
 
 export function invalidate () {
   cache = null
+  cacheStamp = ''
 }
 
 export function isLoggedIn () {
@@ -108,17 +123,12 @@ export function isLoggedIn () {
 }
 
 export function hasFingerprint (s = load()) {
-  return Boolean(
-    String(s.mobileModel || '').trim() &&
-      String(s.mobileOsVersion || '').trim() &&
-      String(s.mobileDeviceId ?? '').trim(),
-  )
+  return missingFingerprint(s).length === 0
 }
 
 export function missingFingerprint (s = load()) {
   const miss = []
   if (!String(s.mobileModel || '').trim()) miss.push('mobileModel')
   if (!String(s.mobileOsVersion || '').trim()) miss.push('mobileOsVersion')
-  if (!String(s.mobileDeviceId ?? '').trim()) miss.push('mobileDeviceId（4.3.3 起必须是设备 UUID，空串会得到 0 系统错误）')
   return miss
 }
