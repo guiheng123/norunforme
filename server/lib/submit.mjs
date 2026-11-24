@@ -2,7 +2,8 @@ import { randomBytes, randomUUID } from 'node:crypto'
 import { LepaoClient } from './lp-client.mjs'
 import { ossPut, packTrackFile, callbackHeader, RUN_RECORD_PREFIX } from './oss.mjs'
 import { analyzeStats, diagnose, verdictOf } from './sim.mjs'
-import { load } from './session.mjs'
+import { load, save } from './session.mjs'
+import { repairKeyedFingerprint } from '../../scripts/lib/auth.mjs'
 import { clockOf, planTiming, resolveStart } from './timing.mjs'
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
@@ -31,7 +32,7 @@ export class SubmitJob {
 
   async run () {
     const s = load()
-    const client = new LepaoClient(s)
+    let client = new LepaoClient(s)
     const pts = this.payload.points || []
     const cps = this.payload.checkpoints || []
     const meta = this.payload.meta || {}
@@ -52,7 +53,39 @@ export class SubmitJob {
 
     let rules = meta.rules || null
     const okZone = await this.step('zone', '拉取跑区与判定规则（beforeRunV260）', async () => {
-      const r = await client.keyed('Run2/beforeRunV260')
+      let r = await client.keyed('Run2/beforeRunV260')
+      const fingerprintSuspect = Number(r.status) === 101 || String(r.info || '').includes('系统错误')
+      if (r.status !== 1 && fingerprintSuspect) {
+        const fix = await repairKeyedFingerprint(s, {
+          extra: [{ mobileDeviceId: client.s.mobileDeviceId }],
+        }).catch(() => null)
+        if (fix?.ok) {
+          const kept = save({
+            mobileModel: fix.session.mobileModel,
+            mobileDeviceId: fix.session.mobileDeviceId,
+            mobileOsVersion: fix.session.mobileOsVersion,
+            lpd3: null,
+            lp54: null,
+          })
+          client = new LepaoClient(kept)
+          r = await client.keyed('Run2/beforeRunV260')
+          this.steps.push({
+            step: 'fingerprint',
+            label: '设备指纹自动修复',
+            state: r.status === 1 ? 'ok' : 'fail',
+            detail: `命中 ${String(fix.mobileDeviceId).slice(0, 8) || "''"}…（试了 ${fix.tried.length} 个候选）`,
+            ms: 0,
+          })
+        } else if (fix?.tried?.length) {
+          this.steps.push({
+            step: 'fingerprint',
+            label: '设备指纹自动修复',
+            state: 'fail',
+            detail: `试了 ${fix.tried.length} 个候选都没过 key= 通道：${fix.tried.map((t) => `${t.value || "''"}→${t.status}`).join(' / ')}`,
+            ms: 0,
+          })
+        }
+      }
       if (r.status !== 1) {
         if (r.dec) return 'beforeRun 未通过，沿用缓存规则'
         if (String(r.status) === '0' && /系统错误/.test(String(r.info || ''))) {

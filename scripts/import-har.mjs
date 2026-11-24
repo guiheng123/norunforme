@@ -3,6 +3,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import crypto from 'node:crypto'
 import { dataRoot } from '../server/lib/paths.mjs'
+import { rememberFingerprint } from './lib/auth.mjs'
 
 const REQ_KEY = Buffer.from('goMEzJ1pDpncNHb9')
 const REQ_IV = Buffer.from('ZUrAS2lUidjyY2gK')
@@ -101,6 +102,10 @@ const FILE = path.join(dataRoot(), 'data', 'session.json')
 let disk = {}
 try { disk = JSON.parse(fs.readFileSync(FILE, 'utf8').replace(/^\uFEFF/, '')) } catch { disk = {} }
 const merged = { ...disk }
+if (disk.token && incoming.token && String(disk.token) !== String(incoming.token)) {
+  delete merged.lp54
+  delete merged.lpd3
+}
 for (const [k, v] of Object.entries(incoming)) {
   if (v === undefined || v === '') continue
   merged[k] = v
@@ -109,5 +114,6 @@ merged.saved_at = new Date().toISOString()
 merged.source = `har:${path.basename(argFile)}`
 fs.mkdirSync(path.dirname(FILE), { recursive: true })
 fs.writeFileSync(FILE, JSON.stringify(merged, null, 2))
+rememberFingerprint(merged)
 console.log(`\n已写入 ${FILE}`)
 console.log('指纹三项：', merged.mobileModel, '/', mask(merged.mobileDeviceId), '/', merged.mobileOsVersion)

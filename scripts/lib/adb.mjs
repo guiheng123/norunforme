@@ -1,8 +1,8 @@
 import { execFile } from 'node:child_process'
-import { existsSync, mkdirSync } from 'node:fs'
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import { join, resolve, dirname, basename } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { dataRoot } from '../../server/lib/paths.mjs'
+import { dataRoot, readAsset, runtimeDir } from '../../server/lib/paths.mjs'
 
 export const PKG = 'com.lptiyu.tanke'
 
@@ -47,6 +47,8 @@ function adbOnPath() {
   return ''
 }
 
+const RUNTIME_ADB = join(runtimeDir(), 'platform-tools', 'adb.exe')
+
 export const DEFAULT_ADB_CANDIDATES = [
   ...new Set(
     [
@@ -56,6 +58,7 @@ export const DEFAULT_ADB_CANDIDATES = [
       join(PROJECT_ROOT, 'tools/platform-tools/adb'),
       join(PROJECT_ROOT, 'platform-tools/adb.exe'),
       join(PROJECT_ROOT, '..', 'platform-tools/adb.exe'),
+      RUNTIME_ADB,
       envg('ANDROID_HOME') && join(envg('ANDROID_HOME'), 'platform-tools/adb.exe'),
       envg('ANDROID_SDK_ROOT') && join(envg('ANDROID_SDK_ROOT'), 'platform-tools/adb.exe'),
       envg('LOCALAPPDATA') && join(envg('LOCALAPPDATA'), 'Android/Sdk/platform-tools/adb.exe'),
@@ -65,6 +68,24 @@ export const DEFAULT_ADB_CANDIDATES = [
     ].filter(Boolean),
   ),
 ]
+
+function materializeAdb () {
+  if (existsSync(RUNTIME_ADB)) return RUNTIME_ADB
+  const exe = readAsset('platform-tools/adb.exe')
+  if (!exe) return ''
+  try {
+    const dir = dirname(RUNTIME_ADB)
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(RUNTIME_ADB, exe)
+    for (const name of ['AdbWinApi.dll', 'AdbWinUsbApi.dll']) {
+      const buf = readAsset('platform-tools/' + name)
+      if (buf) writeFileSync(join(dir, name), buf)
+    }
+    return RUNTIME_ADB
+  } catch {
+    return ''
+  }
+}
 
 let cachedAdb = null
 
@@ -81,6 +102,11 @@ export function resolveAdb(explicit) {
       cachedAdb = p
       return p
     }
+  }
+  const made = materializeAdb()
+  if (made) {
+    cachedAdb = made
+    return made
   }
   cachedAdb = 'adb'
   return cachedAdb

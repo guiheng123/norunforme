@@ -69,8 +69,19 @@ export function save (patch) {
   for (const [k, v] of Object.entries(patch || {})) {
     if (DROP.has(k)) continue
     if (v === undefined) continue
+    if (v === null) {
+      delete merged[k]
+      continue
+    }
     if (typeof v === 'string' && v.trim() === '' && !META.has(k) && !FINGERPRINT_KEYS.has(k)) continue
     merged[k] = typeof v === 'string' ? v.trim() : v
+  }
+  const switched =
+    (patch?.token !== undefined && base.token !== undefined && String(patch.token) !== String(base.token)) ||
+    (patch?.uid !== undefined && base.uid !== undefined && Number(patch.uid) !== Number(base.uid))
+  if (switched) {
+    delete merged.lpd3
+    delete merged.lp54
   }
   cache = { ...merged, saved_at: new Date().toISOString() }
   fs.mkdirSync(DATA_DIR, { recursive: true })

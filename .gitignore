@@ -13,7 +13,6 @@ run-analysis.json
 protocol-cache.json
 *.har
 docs/
-tools/platform-tools
 .vscode/
 .idea/
 .DS_Store

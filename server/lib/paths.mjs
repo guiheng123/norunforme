@@ -60,3 +60,22 @@ export function assetKeysUnder (prefix) {
   const p = prefix.replace(/\\/g, '/')
   return [...ASSETS].filter((k) => k.startsWith(p))
 }
+
+export function materializeAsset (rel, dir) {
+  const key = rel.replace(/\\/g, '/')
+  const target = path.join(dir, key)
+  if (fs.existsSync(target)) return target
+  const buf = readAsset(key)
+  if (!buf) return null
+  try {
+    fs.mkdirSync(path.dirname(target), { recursive: true })
+    fs.writeFileSync(target, buf)
+    return target
+  } catch {
+    return null
+  }
+}
+
+export function runtimeDir () {
+  return path.join(dataRoot(), 'data', 'runtime')
+}

@@ -1,7 +1,7 @@
 import { spawn, execFile } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
-import { codeRoot, dataRoot } from './paths.mjs'
+import { codeRoot, dataRoot, materializeAsset, runtimeDir } from './paths.mjs'
 import { resolveAdb, clearAdbCache, adbInfo, missingAdbText, missingAdbDetail, adbEnv } from '../../scripts/lib/adb.mjs'
 
 const ROOT = codeRoot()
@@ -16,13 +16,19 @@ export const runs = new Map()
 
 // 设备注入需要的随包文件
 export const COMPANIONS = [
-  ['runner', path.join(ROOT, 'analysis', 'frida', 'runner.py')],
-  ['agent', path.join(ROOT, 'analysis', 'frida', 'amap3.js')],
-  ['feed', path.join(ROOT, 'analysis', 'feed.sh')],
+  ['runner', 'analysis/frida/runner.py'],
+  ['agent', 'analysis/frida/amap3.js'],
+  ['feed', 'analysis/feed.sh'],
 ]
 
+export function companionPath (rel) {
+  const local = path.join(ROOT, rel)
+  if (fs.existsSync(local)) return local
+  return materializeAsset(rel, runtimeDir()) || local
+}
+
 export function companionStatus () {
-  return Object.fromEntries(COMPANIONS.map(([k, p]) => [k, fs.existsSync(p)]))
+  return Object.fromEntries(COMPANIONS.map(([k, rel]) => [k, fs.existsSync(companionPath(rel))]))
 }
 
 export function adbInfoNow () {
@@ -306,8 +312,8 @@ export async function startRun (points, startAt) {
   const fr = await probeFrida(true)
   if (fr.ready && fr.appPid) {
     const py = PY || 'python'
-    const runner = path.join(ROOT, 'analysis', 'frida', 'runner.py')
-    const agent = path.join(ROOT, 'analysis', 'frida', 'amap3.js')
+    const runner = companionPath('analysis/frida/runner.py')
+    const agent = companionPath('analysis/frida/amap3.js')
     const logFile = path.join(TMP, `${id}.log`)
     if (!fs.existsSync(runner) || !fs.existsSync(agent)) {
       throw new Error('缺少 frida agent 脚本（analysis/frida/runner.py / amap3.js）')
@@ -330,7 +336,7 @@ export async function startRun (points, startAt) {
     const local = path.join(TMP, `${id}.txt`)
     fs.writeFileSync(local, list)
     await adb(['push', local, '/data/local/tmp/track.txt'], 20000, s)
-    const feed = path.join(ROOT, 'analysis', 'feed.sh')
+    const feed = companionPath('analysis/feed.sh')
     if (fs.existsSync(feed)) await adb(['push', feed, '/data/local/tmp/feed.sh'], 20000, s)
     await adb(['shell', 'chmod 755 /data/local/tmp/feed.sh; nohup sh /data/local/tmp/feed.sh /data/local/tmp/track.txt 1 >/dev/null 2>&1 &'], 15000, s)
     job.mode = 'provider'

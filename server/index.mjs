@@ -283,6 +283,8 @@ async function syncFromDevice({ uid = 0, serial = '', fingerprint = {} } = {}) {
     nick_name: r.session.nick_name,
     run_zone_id: r.session.run_zone_id,
     term_id: r.session.term_id,
+    lpd3: null,
+    lp54: null,
   }
   store.invalidate()
   const kept = Object.fromEntries(
@@ -405,7 +407,8 @@ const server = http.createServer(async (req, res) => {
         uid: candidate.uid,
         school_id: num(index.dec?.school_id || candidate.school_id),
         student_num: String(index.dec?.number || candidate.student_num || ''),
-        ...(candidate.lpd3 ? { lpd3: candidate.lpd3 } : {}),
+        lpd3: candidate.lpd3 || null,
+        lp54: null,
         mobileModel: incoming.mobileModel,
         ...(incoming.mobileDeviceId !== undefined ? { mobileDeviceId: incoming.mobileDeviceId } : {}),
         mobileOsVersion: incoming.mobileOsVersion,

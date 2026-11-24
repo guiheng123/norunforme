@@ -223,8 +223,42 @@ function fingerprintVariants(session, extra = []) {
 }
 
 const absentDeviceId = (v) => v === undefined || v === null || String(v).trim() === ''
+const probeMiss = new Map()
+const PROBE_MISS_TTL = 30000
 
-export async function verifySession(session, { retryFingerprint = true, fingerprints, deviceIds } = {}) {
+export async function tryKeyedFingerprint(session, mobileDeviceId, { mod = 'Run2/beforeRunV260' } = {}) {
+  const { LepaoClient } = await import('../../server/lib/lp-client.mjs')
+  const s = { ...session, mobileDeviceId, lpd3: undefined, lp54: undefined }
+  try {
+    const r = await new LepaoClient(s).keyed(mod)
+    return { ok: Number(r.status) === 1, status: Number(r.status), info: r.info ?? '', session: s, dec: r.dec }
+  } catch (e) {
+    return { ok: false, status: -1, info: e.message, session: s }
+  }
+}
+
+export async function repairKeyedFingerprint(session, { extra = [], scan = true, mod = 'Run2/beforeRunV260' } = {}) {
+  const s = normalizeSession(session)
+  let scanned = []
+  if (scan) {
+    const uuids = await findAppUuids({}).catch(() => [])
+    if (uuids.length) scanned = uuids.map((u) => ({ value: u.value }))
+  }
+  const ids = deviceIdCandidates({ session: s, cands: { deviceIds: scanned }, extra })
+  const tried = []
+  for (const c of ids.slice(0, 10)) {
+    const r = await tryKeyedFingerprint(s, c.value, { mod })
+    tried.push({ value: c.value, status: r.status, why: c.why })
+    if (r.ok) {
+      rememberFingerprint(r.session)
+      return { ok: true, session: r.session, mobileDeviceId: c.value, tried, status: r.status }
+    }
+    if (r.status === 102) break
+  }
+  return { ok: false, tried, status: tried.at(-1)?.status ?? -1 }
+}
+
+export async function verifySession(session, { retryFingerprint = true, fingerprints, deviceIds, keyedOracle = false } = {}) {
   const s0 = normalizeSession(session)
   const miss = missingFingerprint(s0)
   const hard = miss.filter((k) => !k.startsWith('mobileDeviceId'))
@@ -232,6 +266,12 @@ export async function verifySession(session, { retryFingerprint = true, fingerpr
   const info4 = `缺少设备指纹：${missingAll.join('、')}。服务端按 (token, uid, 设备指纹) 定位会话，缺失必然 101，请填写后再试。`
   if (hard.length) {
     return { ok: false, status: -4, needFingerprint: true, missing: missingAll, info: info4, session: s0 }
+  }
+
+  const probeKey = [s0.token, s0.uid, s0.mobileModel, s0.mobileOsVersion].join('|')
+  const probeBlocked = retryFingerprint && Date.now() - (probeMiss.get(probeKey) || 0) < PROBE_MISS_TTL
+  if (probeBlocked && absentDeviceId(s0.mobileDeviceId)) {
+    return { ok: false, status: -4, needFingerprint: true, missing: ['mobileDeviceId'], info: info4, session: s0 }
   }
 
   const plan = []
@@ -244,7 +284,7 @@ export async function verifySession(session, { retryFingerprint = true, fingerpr
     plan.push({ s, why })
   }
   if (!absentDeviceId(s0.mobileDeviceId)) push(s0, '当前')
-  if (retryFingerprint) {
+  if (retryFingerprint && !probeBlocked) {
     for (const d of deviceIdCandidates({
       session: s0,
       extra: [].concat(fingerprints || [], deviceIds || []),
@@ -256,17 +296,32 @@ export async function verifySession(session, { retryFingerprint = true, fingerpr
   if (!plan.length) push(s0, '当前')
 
   let last = null
+  let plainHit = null
   for (const { s, why } of plan.slice(0, 12)) {
     try {
       const r = await makeClient(s)('User/myZone')
       const status = Number(r.status)
       if (status === 1) {
         const resolved = why !== '当前'
+        if (keyedOracle) {
+          const k = await tryKeyedFingerprint(s, s.mobileDeviceId)
+          if (!k.ok) {
+            if (!plainHit) plainHit = { ...s, why }
+            last = { ok: false, status: k.status, info: k.info, session: s }
+            if (k.status === 102) {
+              return { ok: false, status: 102, info: k.info, data: r.data, session: s }
+            }
+            continue
+          }
+        }
         if (resolved) rememberFingerprint(s)
-        return { ok: true, status, info: r.info ?? '', data: r.data, session: s, retried: resolved, via: why }
+        return { ok: true, status, info: r.info ?? '', data: r.data, session: s, retried: resolved, via: why, keyVerified: true }
       }
       if (String(r.info || '').includes('版本过低')) {
         return { ok: false, status: 0, gate: 'version', info: r.info, data: r.data, session: s }
+      }
+      if (status === 102) {
+        return { ok: false, status, info: r.info ?? '', data: r.data, session: s }
       }
       last = { ok: false, status, info: r.info ?? '', data: r.data, session: s }
     } catch (e) {
@@ -274,13 +329,29 @@ export async function verifySession(session, { retryFingerprint = true, fingerpr
     }
   }
 
+  if (plainHit) {
+    if (plan.length > 1) probeMiss.set(probeKey, Date.now())
+    return {
+      ok: true,
+      status: 1,
+      info: '明文接口可读，但 key= 通道没通过（mobileDeviceId 为空）：跑区与提交会回 0 系统错误',
+      session: plainHit,
+      retried: true,
+      via: plainHit.why,
+      keyVerified: false,
+    }
+  }
+
   const out = { ...(last || { ok: false, status: -4, session: s0 }) }
-  if (absentDeviceId(s0.mobileDeviceId) && out.status !== 102) {
-    out.ok = false
-    out.status = -4
-    out.needFingerprint = true
-    out.missing = ['mobileDeviceId']
-    out.info = info4
+  if (plan.length > 1) probeMiss.set(probeKey, Date.now())
+  if (out.status !== 102) {
+    if (absentDeviceId(s0.mobileDeviceId)) {
+      out.ok = false
+      out.status = -4
+      out.needFingerprint = true
+      out.missing = ['mobileDeviceId']
+      out.info = info4
+    }
   }
   return out
 }
@@ -850,11 +921,18 @@ export async function loginFromDevice(opts = {}) {
   }).map((c) => c.value)
 
   const attempt = async (sess) => {
-    const v = await verifySession(sess, { fingerprints: altFps, deviceIds: idCandidates })
+    const v = await verifySession(sess, {
+      fingerprints: altFps,
+      deviceIds: idCandidates,
+      keyedOracle: opts.keyed !== false,
+    })
     const fp = v.session
       ? `${v.session.mobileModel}/${v.session.mobileDeviceId || '-'}/a${v.session.mobileOsVersion}`
       : ''
     trace.push(`校验：${v.status} ${v.info || 'ok'}${v.retried ? `（换指纹 ${fp} 后通过）` : ''}`)
+    if (v.ok && v.keyVerified === false) {
+      trace.push('key= 通道没通过：mobileDeviceId 留空只在明文接口可用，跑区/提交会回 0 系统错误。用 import-har 导入抓包，或 root 后重跑本命令取真值')
+    }
     return v
   }
 
@@ -863,7 +941,16 @@ export async function loginFromDevice(opts = {}) {
     const picked = { ...session, ...(v.session ? pickFingerprint(v.session) : {}) }
     rememberFingerprint(picked)
     const full = await hydrate(picked, meta)
-    return { ok: true, session: full, verified: true, trace: [...trace, ...(v.retried ? [`指纹已确定：${JSON.stringify(pickFingerprint(v.session))}`] : [])], cands, combo, device }
+    return {
+      ok: true,
+      session: full,
+      verified: true,
+      keyVerified: v.keyVerified !== false,
+      trace: [...trace, ...(v.retried ? [`指纹已确定：${JSON.stringify(pickFingerprint(v.session))}`] : [])],
+      cands,
+      combo,
+      device,
+    }
   }
 
   if (v.needFingerprint) {

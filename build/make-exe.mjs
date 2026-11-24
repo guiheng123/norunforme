@@ -134,6 +134,25 @@ for (const f of files) {
 }
 log(`内嵌静态资源 ${Object.keys(assets).length} 个（${(files.reduce((a, f) => a + fs.statSync(f).size, 0) / 1024).toFixed(0)} KB）`)
 
+const EMBED_DEPS = [
+  'analysis/frida/runner.py',
+  'analysis/frida/amap3.js',
+  'analysis/feed.sh',
+  'platform-tools/adb.exe',
+  'platform-tools/AdbWinApi.dll',
+  'platform-tools/AdbWinUsbApi.dll',
+]
+let embedded = 0
+let embeddedBytes = 0
+for (const rel of EMBED_DEPS) {
+  const src = rel.startsWith('platform-tools/') ? path.join(ROOT, 'tools', rel) : path.join(ROOT, rel)
+  if (!fs.existsSync(src)) continue
+  assets[rel] = src
+  embedded += 1
+  embeddedBytes += fs.statSync(src).size
+}
+log(`内嵌设备依赖 ${embedded} 个（${(embeddedBytes / 1024).toFixed(0)} KB）`)
+
 const seaConfig = {
   main: bundle,
   output: EXE,
@@ -198,7 +217,7 @@ function copyCompanions (dir) {
     if (!fs.existsSync(src)) { missing.push(rel); continue }
     put(src, path.join(dir, rel), rel)
   }
-  if (missing.length) die('缺少设备注入依赖：' + missing.join('、'))
+  if (missing.length) log(`未找到 ${missing.join('、')}，同级目录不带（exe 内已内嵌时运行期会自解包）`)
 
   const adbDir = path.join(ROOT, 'tools', 'platform-tools')
   let adb = 0
@@ -237,8 +256,8 @@ fs.writeFileSync(path.join(outDir, 'README.txt'), [
   '  LP_PYTHON    python.exe 路径（frida 注入才需要）',
   '',
   '设备控制台：',
-  '  analysis/         frida 注入脚本，已随包，勿删',
-  '  platform-tools/   adb，已随包（不可用时设 LP_ADB 指向外部 adb）',
+  '  analysis/         frida 注入脚本（已内嵌进 exe，首次运行自解包到 data/runtime/analysis）',
+  '  platform-tools/   adb（已内嵌进 exe，首次运行自解包到 data/runtime/platform-tools；也可设 LP_ADB 指向外部 adb）',
   '  frida 注入还需要本机 python + frida：pip install frida',
   '',
   '登录态存在 exe 同级的 data/session.json，整个文件夹拷走即带走登录。',

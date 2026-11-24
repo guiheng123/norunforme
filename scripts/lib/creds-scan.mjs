@@ -227,7 +227,7 @@ export function extractFromBuffer(buf, opts = {}) {
     deviceIds.push({ value: v, key: 'uuid-ctx', offset: m.index, source, ctx, confidence: 'app' })
   }
 
-  const squashed = Buffer.from(buf.filter((b) => b !== 0)).toString('latin1')
+  const squashed = buf.length <= 4 * 1024 * 1024 ? Buffer.from(buf.filter((b) => b !== 0)).toString('latin1') : ''
   for (const m of squashed.matchAll(ANY_UUID_RE)) {
     const v = m[0].toLowerCase()
     if (/^00000000-0000-0000-0000-000000000000$/.test(v)) continue
