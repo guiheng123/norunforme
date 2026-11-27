@@ -80,7 +80,7 @@ const activeLabel = computed(() => nav.find((item) => isActive(item))?.label ?? 
     </nav>
 
     <div class="side__foot">
-      <span class="side__ver">v1.0.0</span>
+      <span class="side__ver">v1.3.0</span>
       <span class="side__meta">Web 控制台</span>
     </div>
   </aside>

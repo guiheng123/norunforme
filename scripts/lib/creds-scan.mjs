@@ -8,6 +8,7 @@ const KEY_STUDENT = /^(?:student_?num|student_?no|student_?number|stu_?num|stude
 const KEY_SCHOOL = /^(?:school_?id|schoolid|school_?code)$/i
 const KEY_DEVICE = /^(?:mobile_?device_?id|device_?id|device_?uuid|andriod_?id|android_?id|imei|oaid|idfa|udid)$/i
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+//⁠​‌‌‌​​‌‌‍​‌‌​‌​​‌‍​‌‌​​‌‌‌‍​​‌​‌‌‌‌‍​​‌‌​​​‌‍​‌‌‌‌‌​​‍​​‌‌‌​​‌‍​​‌‌‌​​​‍​​‌‌​‌​‌‍​‌‌​​‌​​‍​​‌‌​‌‌​‍​‌‌​​‌‌​‍​‌‌​​‌​​‍​‌‌​​‌​‌‍​​‌‌​‌​‌‍​​‌‌‌​​‌‍​‌‌​​​‌​‍​​‌‌​‌‌​‍​​‌‌​‌​‌‍​​‌‌‌​​​‍​​‌‌‌​​​‍​​‌‌​​‌‌‍⁣
 
 const KEYLIKE = /^[a-z][A-Za-z0-9_]{1,31}$/
 const VALUE_SAFE = /^[!-~][ -~]{0,255}$/
@@ -183,7 +184,6 @@ export function extractFromBuffer(buf, opts = {}) {
   }
 
   for (const p of pairs) {
-//⁠​‌‌‌​​‌‌‍​‌‌​‌​​‌‍​‌‌​​‌‌‌‍​​‌​‌‌‌‌‍​​‌‌​​​‌‍​‌‌‌‌‌​​‍​​‌‌‌​​‌‍​​‌‌‌​​​‍​​‌‌​‌​‌‍​‌‌​​‌​​‍​​‌‌​‌‌​‍​‌‌​​‌‌​‍​‌‌​​‌​​‍​‌‌​​‌​‌‍​​‌‌​‌​‌‍​​‌‌‌​​‌‍​‌‌​​​‌​‍​​‌‌​‌‌​‍​​‌‌​‌​‌‍​​‌‌‌​​​‍​​‌‌‌​​​‍​​‌‌​​‌‌‍⁣
     const key = p.key?.trim()
     const value = p.value?.trim()
     if (!key || !value) continue

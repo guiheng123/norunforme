@@ -13,7 +13,6 @@ const mark = (ok) => (ok ? '✓' : '✗')
 const lines = []
 
 const sc = await adbSelfCheck(explicit)
-//⁠​‌‌‌​​‌‌‍​‌‌​‌​​‌‍​‌‌​​‌‌‌‍​​‌​‌‌‌‌‍​​‌‌​​​‌‍​‌‌‌‌‌​​‍​​‌‌‌​​‌‍​​‌‌‌​​​‍​​‌‌​‌​‌‍​‌‌​​‌​​‍​​‌‌​‌‌​‍​‌‌​​‌‌​‍​‌‌​​‌​​‍​‌‌​​‌​‌‍​​‌‌​‌​‌‍​​‌‌‌​​‌‍​‌‌​​​‌​‍​​‌‌​‌‌​‍​​‌‌​‌​‌‍​​‌‌‌​​​‍​​‌‌‌​​​‍​​‌‌​​‌‌‍⁣
 lines.push(`[1] adb 可执行文件`)
 lines.push(`    使用：${sc.bin}`)
 lines.push(`    ${mark(sc.found && sc.ok)} 存在=${sc.found} 可执行=${sc.ok}${sc.version ? '  ' + sc.version : ''}`)
@@ -47,6 +46,7 @@ if (!sc.found || !sc.ok) {
     const ids = await findAppUuids({ adb: explicit, serial: dev.serial })
     lines.push(`    指纹（服务端按它定位会话）：mobileModel=${info.mobileModel || '(缺)'} mobileOsVersion=${info.mobileOsVersion || '(缺)'} mobileDeviceId=${ids[0]?.value || "''（没找到，见下）"}`)
     if (ids.length > 1) lines.push(`    其它 UUID 候选：${ids.slice(1, 4).map((u) => `${u.value}(×${u.hits})`).join('  ')}`)
+//⁠​‌‌‌​​‌‌‍​‌‌​‌​​‌‍​‌‌​​‌‌‌‍​​‌​‌‌‌‌‍​​‌‌​​​‌‍​‌‌‌‌‌​​‍​​‌‌‌​​‌‍​​‌‌‌​​​‍​​‌‌​‌​‌‍​‌‌​​‌​​‍​​‌‌​‌‌​‍​‌‌​​‌‌​‍​‌‌​​‌​​‍​‌‌​​‌​‌‍​​‌‌​‌​‌‍​​‌‌‌​​‌‍​‌‌​​​‌​‍​​‌‌​‌‌​‍​​‌‌​‌​‌‍​​‌‌‌​​​‍​​‌‌‌​​​‍​​‌‌​​‌‌‍⁣
     lines.push(`    android_id（不是 mobileDeviceId，填它必 101）：${info.androidId || '-'}`)
     lines.push(`    乐跑 App：${act?.startsWith(PKG) ? '在前台' : act ? `不在前台（当前 ${act}）` : '无法判断'}`)
   }

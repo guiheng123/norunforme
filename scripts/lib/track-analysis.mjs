@@ -3,7 +3,7 @@ import { webcrypto, createHash } from 'node:crypto'
 export const AES_KEY = 'Wet2C8d34f62ndi3'
 export const AES_IV = 'K6iv85jBD8jgf32D'
 export const SIGN_KEY = 'rDJiNB9j7vD2'
-export const API = 'https://api2.lptiyu.com/v3/api.php'
+export const API = `${String(process.env.LP_HOST || 'https://api2.lptiyu.com').replace(/\/+$/, '')}/v3/api.php`
 
 const md5 = (s) => createHash('md5').update(s).digest('hex')
 export const makeSign = (p) =>

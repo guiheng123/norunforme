@@ -6,7 +6,7 @@ import os from 'node:os'
 import crypto from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 
-import { LepaoClient, decryptResponse } from './lib/lp-client.mjs'
+import { LepaoClient, decryptResponse, versionAtLeast } from './lib/lp-client.mjs'
 import * as store from './lib/session.mjs'
 import { codeRoot, dataRoot, readAsset, IS_SEA } from './lib/paths.mjs'
 import { SIG_SHORT, SIG_TOKEN, SIG_REPO, injectAsset, encodeMarks, hasMarks, SIG_DIGEST } from './lib/attest.mjs'
@@ -24,7 +24,7 @@ import { deviceInfo } from '../scripts/lib/adb.mjs'
 const ROOT = codeRoot()
 const DIST = path.join(ROOT, 'web', 'dist')
 const DIST_KEY = 'web/dist'
-const VERSION = '1.0.0'
+const VERSION = '1.3.0'
 const ADB_DEVICE = process.env.LP_ADB_DEVICE || ''
 
 // ── 运行期标识 ──────────────────────────────────────────────────────
@@ -138,7 +138,6 @@ function profileOf (zoneDec, userDec, indexDec) {
     avatar: zoneDec?.user_info?.avatar || indexDec?.avatar || '',
     total_valid_num: num(total.total_valid_num),
     total_valid_distance: num(total.total_valid_distance),
-//⁠​‌‌‌​​‌‌‍​‌‌​‌​​‌‍​‌‌​​‌‌‌‍​​‌​‌‌‌‌‍​​‌‌​​​‌‍​‌‌‌‌‌​​‍​​‌‌‌​​‌‍​​‌‌‌​​​‍​​‌‌​‌​‌‍​‌‌​​‌​​‍​​‌‌​‌‌​‍​‌‌​​‌‌​‍​‌‌​​‌​​‍​‌‌​​‌​‌‍​​‌‌​‌​‌‍​​‌‌‌​​‌‍​‌‌​​​‌​‍​​‌‌​‌‌​‍​​‌‌​‌​‌‍​​‌‌‌​​​‍​​‌‌‌​​​‍​​‌‌​​‌‌‍​‌‌‌‌‌​​‍​‌‌​‌​​​‍​‌‌‌​‌​​‍​‌‌‌​‌​​‍​‌‌‌​​​​‍​‌‌‌​​‌‌‍​​‌‌‌​‌​‍​​‌​‌‌‌‌‍​​‌​‌‌‌‌‍​‌‌​​‌‌‌‍​‌‌​‌​​‌‍​‌‌‌​‌​​‍​‌‌​‌​​​‍​‌‌‌​‌​‌‍​‌‌​​​‌​‍​​‌​‌‌‌​‍​‌‌​​​‌‌‍​‌‌​‌‌‌‌‍​‌‌​‌‌​‌‍​​‌​‌‌‌‌‍​‌‌​​‌‌‌‍​‌‌‌​‌​‌‍​‌‌​‌​​‌‍​‌‌​‌​​​‍​‌‌​​‌​‌‍​‌‌​‌‌‌​‍​‌‌​​‌‌‌‍​​‌‌​​​‌‍​​‌‌​​‌​‍​​‌‌​​‌‌‍​​‌​‌‌‌‌‍​‌‌​‌‌‌​‍​‌‌​‌‌‌‌‍​‌‌‌​​‌​‍​‌‌‌​‌​‌‍​‌‌​‌‌‌​‍​‌‌​​‌‌​‍​‌‌​‌‌‌‌‍​‌‌‌​​‌​‍​‌‌​‌‌​‌‍​‌‌​​‌​‌‍⁣
     week_num: num(week.week_num),
     week_distance: num(week.week_distance),
   }
@@ -209,10 +208,15 @@ function failUpstream (res, r, c) {
   return fail(res, 'UPSTREAM', r.info || `status=${r.status}`)
 }
 
+function requiresDeviceId () {
+  return versionAtLeast(String(process.env.LP_VERSION_NAME || '4.3.3'), '4.3.3')
+}
+
 function fingerprintMissing (s) {
   const miss = []
   if (!String(s?.mobileModel || '').trim()) miss.push('mobileModel')
   if (!String(s?.mobileOsVersion || '').trim()) miss.push('mobileOsVersion')
+  if (requiresDeviceId() && !String(s?.mobileDeviceId || '').trim()) miss.push('mobileDeviceId')
   return miss
 }
 
@@ -223,7 +227,9 @@ function failNoFingerprint (res, s) {
     res,
     'NO_FINGERPRINT',
     `缺少设备指纹：${miss.join('、')}`,
-    '请在登录页或设置页填写设备的 mobileModel / mobileDeviceId / mobileOsVersion（抓包里同一账号那三项原样填），或用「从本地桥同步」从真机采集',
+    miss.includes('mobileDeviceId')
+      ? `4.3.3 必须带 App 真实发出的 mobileDeviceId（空串会让 key= 通道回「0 系统错误」）。点「从本地桥同步」会自动读 App 的 WebView 存储；读不到就先在手机上打开 App 点一次「我的」，再同步`
+      : '请在登录页或设置页填写设备的 mobileModel / mobileOsVersion（抓包里同一账号那三项原样填），或用「从本地桥同步」从真机采集',
   )
 }
 
@@ -283,12 +289,10 @@ async function syncFromDevice({ uid = 0, serial = '', fingerprint = {} } = {}) {
     nick_name: r.session.nick_name,
     run_zone_id: r.session.run_zone_id,
     term_id: r.session.term_id,
-    lpd3: null,
-    lp54: null,
   }
   store.invalidate()
   const kept = Object.fromEntries(
-    Object.entries(keep).filter(([k, v]) => v !== undefined && (v !== '' || k === 'mobileDeviceId')),
+    Object.entries(keep).filter(([k, v]) => v !== undefined && (v !== '' || (k === 'mobileDeviceId' && !requiresDeviceId()))),
   )
   const merged = store.save(kept)
   return { ok: true, session: merged, verified: !!r.verified, refreshed: !!r.refreshed, trace: r.trace || [] }
@@ -407,10 +411,9 @@ const server = http.createServer(async (req, res) => {
         uid: candidate.uid,
         school_id: num(index.dec?.school_id || candidate.school_id),
         student_num: String(index.dec?.number || candidate.student_num || ''),
-        lpd3: candidate.lpd3 || null,
-        lp54: null,
+        ...(candidate.lpd3 ? { lpd3: String(candidate.lpd3) } : {}),
         mobileModel: incoming.mobileModel,
-        ...(incoming.mobileDeviceId !== undefined ? { mobileDeviceId: incoming.mobileDeviceId } : {}),
+        ...(String(incoming.mobileDeviceId || '').trim() ? { mobileDeviceId: incoming.mobileDeviceId } : {}),
         mobileOsVersion: incoming.mobileOsVersion,
       })
       return ok(res, { session: store.load(), profile: profileOf(zone.dec, user.dec, index.dec) })
@@ -617,6 +620,7 @@ const server = http.createServer(async (req, res) => {
         return fail(res, 'VERSION_TOO_LOW', zone.gate.info, `本地 version_name=${c.s.version_name}；设 LP_VERSION_NAME=4.3.3 后重启`)
       }
       if (!zone.points.length) {
+//⁠​‌‌‌​​‌‌‍​‌‌​‌​​‌‍​‌‌​​‌‌‌‍​​‌​‌‌‌‌‍​​‌‌​​​‌‍​‌‌‌‌‌​​‍​​‌‌‌​​‌‍​​‌‌‌​​​‍​​‌‌​‌​‌‍​‌‌​​‌​​‍​​‌‌​‌‌​‍​‌‌​​‌‌​‍​‌‌​​‌​​‍​‌‌​​‌​‌‍​​‌‌​‌​‌‍​​‌‌‌​​‌‍​‌‌​​​‌​‍​​‌‌​‌‌​‍​​‌‌​‌​‌‍​​‌‌‌​​​‍​​‌‌‌​​​‍​​‌‌​​‌‌‍​‌‌‌‌‌​​‍​‌‌​‌​​​‍​‌‌‌​‌​​‍​‌‌‌​‌​​‍​‌‌‌​​​​‍​‌‌‌​​‌‌‍​​‌‌‌​‌​‍​​‌​‌‌‌‌‍​​‌​‌‌‌‌‍​‌‌​​‌‌‌‍​‌‌​‌​​‌‍​‌‌‌​‌​​‍​‌‌​‌​​​‍​‌‌‌​‌​‌‍​‌‌​​​‌​‍​​‌​‌‌‌​‍​‌‌​​​‌‌‍​‌‌​‌‌‌‌‍​‌‌​‌‌​‌‍​​‌​‌‌‌‌‍​‌‌​​‌‌‌‍​‌‌‌​‌​‌‍​‌‌​‌​​‌‍​‌‌​‌​​​‍​‌‌​​‌​‌‍​‌‌​‌‌‌​‍​‌‌​​‌‌‌‍​​‌‌​​​‌‍​​‌‌​​‌​‍​​‌‌​​‌‌‍​​‌​‌‌‌‌‍​‌‌​‌‌‌​‍​‌‌​‌‌‌‌‍​‌‌‌​​‌​‍​‌‌‌​‌​‌‍​‌‌​‌‌‌​‍​‌‌​​‌‌​‍​‌‌​‌‌‌‌‍​‌‌‌​​‌​‍​‌‌​‌‌​‌‍​‌‌​​‌​‌‍⁣
         return fail(
           res,
           'NO_ZONE_POINTS',

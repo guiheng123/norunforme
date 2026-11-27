@@ -8,6 +8,36 @@ import { clockOf, planTiming, resolveStart } from './timing.mjs'
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
+const absentDeviceId = (v) => v === undefined || v === null || String(v).trim() === ''
+
+export async function keyedWithFingerprintRepair (client, session, { mod = 'Run2/beforeRunV260' } = {}) {
+  const t0 = Date.now()
+  const emptyId = absentDeviceId(client.s.mobileDeviceId)
+
+  if (!emptyId) {
+    const first = await client.keyed(mod)
+    const status = Number(first.status)
+    const suspect = status === 0 || status === 101 || status === 102 || /系统错误/.test(String(first.info || ''))
+    if (status === 1 || !suspect) return { client, r: first, fix: null, ms: Date.now() - t0, emptyId }
+  }
+
+  const fix = await repairKeyedFingerprint(session, {
+    extra: [{ mobileDeviceId: client.s.mobileDeviceId }],
+    mod,
+  }).catch((e) => ({ ok: false, tried: [], status: -1, error: String(e?.message || e), hint: '' }))
+
+  if (!fix?.ok) return { client, r: null, fix, ms: Date.now() - t0, emptyId }
+
+  const kept = save({
+    mobileModel: fix.session.mobileModel,
+    mobileDeviceId: fix.session.mobileDeviceId,
+    mobileOsVersion: fix.session.mobileOsVersion,
+  })
+  const next = new LepaoClient(kept)
+  const r = await next.keyed(mod)
+  return { client: next, r, fix, ms: Date.now() - t0, emptyId }
+}
+
 export class SubmitJob {
   constructor (id, payload) {
     this.id = id
@@ -52,51 +82,68 @@ export class SubmitJob {
     if (!okAuth) { this.finish(false, ['鉴权失败，token 已失效或被其它设备顶号']); return }
 
     let rules = meta.rules || null
+    let zoneFail = '跑区接口不可用'
     const okZone = await this.step('zone', '拉取跑区与判定规则（beforeRunV260）', async () => {
-      let r = await client.keyed('Run2/beforeRunV260')
-      const fingerprintSuspect = Number(r.status) === 101 || String(r.info || '').includes('系统错误')
-      if (r.status !== 1 && fingerprintSuspect) {
-        const fix = await repairKeyedFingerprint(s, {
-          extra: [{ mobileDeviceId: client.s.mobileDeviceId }],
-        }).catch(() => null)
-        if (fix?.ok) {
-          const kept = save({
-            mobileModel: fix.session.mobileModel,
-            mobileDeviceId: fix.session.mobileDeviceId,
-            mobileOsVersion: fix.session.mobileOsVersion,
-            lpd3: null,
-            lp54: null,
-          })
-          client = new LepaoClient(kept)
-          r = await client.keyed('Run2/beforeRunV260')
-          this.steps.push({
-            step: 'fingerprint',
-            label: '设备指纹自动修复',
-            state: r.status === 1 ? 'ok' : 'fail',
-            detail: `命中 ${String(fix.mobileDeviceId).slice(0, 8) || "''"}…（试了 ${fix.tried.length} 个候选）`,
-            ms: 0,
-          })
-        } else if (fix?.tried?.length) {
-          this.steps.push({
-            step: 'fingerprint',
-            label: '设备指纹自动修复',
-            state: 'fail',
-            detail: `试了 ${fix.tried.length} 个候选都没过 key= 通道：${fix.tried.map((t) => `${t.value || "''"}→${t.status}`).join(' / ')}`,
-            ms: 0,
-          })
-        }
+      const out = await keyedWithFingerprintRepair(client, load())
+      client = out.client
+      const r = out.r
+      const st = r ? Number(r.status) : null
+
+      if (out.fix) {
+        const tried = out.fix.tried || []
+        const hit = tried.findIndex((t) => Number(t.status) === 1)
+        this.steps.push({
+          step: 'fingerprint',
+          label: '设备指纹自动修复',
+          state: out.fix.ok && st === 1 ? 'ok' : 'fail',
+          detail: out.fix.ok
+            ? `第 ${hit + 1}/${tried.length} 个候选通过：${String(out.fix.mobileDeviceId || '').slice(0, 12)}…（来源：${tried[hit]?.why || '-'}）`
+            : out.fix.error
+              ? `探测异常：${out.fix.error}`
+              : `试了 ${tried.length} 个候选都没过 key= 通道：${tried
+                  .map((t) => `${t.value || "''"}→${t.status}${Number.isFinite(t.ms) ? ` ${t.ms}ms` : ''}（${t.why || '?'}）`)
+                  .join(' / ')}${out.fix.hint ? '。' + out.fix.hint : ''}`,
+          ms: out.ms,
+        })
       }
-      if (r.status !== 1) {
-        if (r.dec) return 'beforeRun 未通过，沿用缓存规则'
-        if (String(r.status) === '0' && /系统错误/.test(String(r.info || ''))) {
+
+      if (!r) {
+        zoneFail = '设备指纹缺失（mobileDeviceId 为空），本地已拦下，未发请求'
+        throw new Error(
+          `mobileDeviceId 是空串：4.3.3 的 key= 通道必然回「0 系统错误」，所以本次没有发出请求。` +
+            `${out.fix?.error ? `（探测异常：${out.fix.error}）` : ''}` +
+            '取法：node scripts/sync-device.mjs --dry 看候选（第 1 位是 App 的 WebView hrefstr），命中后去掉 --dry 写盘；' +
+            '也可以用手机抓一条 User/User：node scripts/import-har.mjs <文件>.har --save',
+        )
+      }
+
+      if (st !== 1) {
+        if (st === 0 && /系统错误/.test(String(r.info || ''))) {
+          zoneFail = 'key= 通道系统错误（指纹与 token 不配套）'
           throw new Error(
             `status=0 系统错误（上游原话）。本次发出的指纹是 ${client.s.mobileModel} / ${client.s.mobileDeviceId ? client.s.mobileDeviceId.slice(0, 8) + '…' : '空'} / ${client.s.mobileOsVersion}：` +
-              'key= 通道在指纹与 token 不配套时会崩成「系统错误」而不回 101/102。' +
-              '4.3.3 起 mobileDeviceId 必须是 App 真实发出去的那个设备 UUID（空串必崩）。' +
-              '用手机 App 抓一条 User/User，再 node scripts/import-har.mjs <文件>.har --save 同步一次即可',
+              'key= 通道在指纹与 token 不配套、或 mobileDeviceId 为空时会崩成「系统错误」而不回 101/102。' +
+              '4.3.3 起 mobileDeviceId 必须是 App 真实发出去的那个设备 UUID（空串必崩）：node scripts/sync-device.mjs --dry 先看候选',
           )
         }
-        throw new Error(`status=${r.status} ${r.info || ''}`)
+        if (st === 101) {
+          zoneFail = '设备指纹不匹配（101）'
+          throw new Error(
+            `101 ${r.info || '登录信息失效'}。服务端按 (token, uid, mobileModel, mobileDeviceId, mobileOsVersion) 定位会话；` +
+              `本次发出 ${client.s.mobileModel} / ${client.s.mobileDeviceId || '空'} / ${client.s.mobileOsVersion}。` +
+              '三项必须与 App 实际发出的完全一致 —— mobileModel 也参与判定，机型写错同样是 101',
+          )
+        }
+        if (st === 102) {
+          zoneFail = '会话已被顶号（102）'
+          throw new Error(`102 ${r.info || '该账号已在其他手机登录'}：token 已作废，手机上重新登录后跑一次 node scripts/sync-device.mjs`)
+        }
+        if (meta.rules && r.dec && r.dec.run_zone_id) {
+          zoneFail = `beforeRun 未通过，沿用缓存规则（status=${st}）`
+          return 'beforeRun 未通过，沿用缓存规则'
+        }
+        zoneFail = `beforeRun 未通过（status=${st}）`
+        throw new Error(`status=${st} ${r.info || ''}`)
       }
       const d = r.dec || {}
       const tr = (d.time_rule_arr && d.time_rule_arr[0]) || {}
@@ -113,7 +160,7 @@ export class SubmitJob {
       }
       return `跑区 ${d.run_zone_name} 规则 ${rules.minDistanceKm}km / ${rules.minPaceSec}s`
     })
-    if (!okZone) { this.finish(false, ['跑区接口不可用']); return }
+    if (!okZone) { this.finish(false, [zoneFail]); return }
 
     const okDistance = await this.step('distance', '里程达标预检（去噪后口径）', async () => {
       const minKm = Number(rules?.minDistanceKm || 1.5)
@@ -239,7 +286,6 @@ export class SubmitJob {
       if (r.status !== 1 || !r.dec) throw new Error(`STS 获取失败 status=${r.status} ${r.info || ''}`)
       const sts = r.dec
       const pad = (n) => String(n).padStart(2, '0')
-//⁠​‌‌‌​​‌‌‍​‌‌​‌​​‌‍​‌‌​​‌‌‌‍​​‌​‌‌‌‌‍​​‌‌​​​‌‍​‌‌‌‌‌​​‍​​‌‌‌​​‌‍​​‌‌‌​​​‍​​‌‌​‌​‌‍​‌‌​​‌​​‍​​‌‌​‌‌​‍​‌‌​​‌‌​‍​‌‌​​‌​​‍​‌‌​​‌​‌‍​​‌‌​‌​‌‍​​‌‌‌​​‌‍​‌‌​​​‌​‍​​‌‌​‌‌​‍​​‌‌​‌​‌‍​​‌‌‌​​​‍​​‌‌‌​​​‍​​‌‌​​‌‌‍⁣
       const dEnd = new Date(endTs * 1000)
       const dayDir = `${dEnd.getFullYear()}-${pad(dEnd.getMonth() + 1)}-${pad(dEnd.getDate())}`
       const seg = String(100 + Math.floor(Math.random() * 900))
@@ -292,6 +338,7 @@ export class SubmitJob {
     })
     const segSec = [0]
     for (let i = 1; i < pts.length; i++) {
+//⁠​‌‌‌​​‌‌‍​‌‌​‌​​‌‍​‌‌​​‌‌‌‍​​‌​‌‌‌‌‍​​‌‌​​​‌‍​‌‌‌‌‌​​‍​​‌‌‌​​‌‍​​‌‌‌​​​‍​​‌‌​‌​‌‍​‌‌​​‌​​‍​​‌‌​‌‌​‍​‌‌​​‌‌​‍​‌‌​​‌​​‍​‌‌​​‌​‌‍​​‌‌​‌​‌‍​​‌‌‌​​‌‍​‌‌​​​‌​‍​​‌‌​‌‌​‍​​‌‌​‌​‌‍​​‌‌‌​​​‍​​‌‌‌​​​‍​​‌‌​​‌‌‍⁣
       const dm = Math.hypot(
         (pts[i].a - pts[i - 1].a) * 111320,
         (pts[i].o - pts[i - 1].o) * 111320 * Math.cos((pts[i].a * Math.PI) / 180),

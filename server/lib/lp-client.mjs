@@ -31,13 +31,31 @@ export function missingFingerprint (s = {}) {
   return miss
 }
 
-export function noFingerprintResult (miss) {
+export function missingKeyFingerprint (s = {}) {
+  const miss = missingFingerprint(s)
+  const id = s.mobileDeviceId
+  const needsId = versionAtLeast(String(s.version_name || CLIENT_VERSION.version_name), '4.3.3')
+  if (needsId && (id === undefined || id === null || String(id).trim() === '')) miss.push('mobileDeviceId')
+  return miss
+}
+
+export function noFingerprintResult (miss, { keyChannel = false } = {}) {
   const missing = miss || []
+  const info = [`缺少设备指纹：${missing.join('、')}`]
+  if (missing.includes('mobileDeviceId')) {
+    info.push(
+      keyChannel
+        ? 'key= 通道在 4.3.3 上必须带 App 真实发出的 mobileDeviceId（空串会得到上游「0 系统错误」），本次请求没有发出'
+        : '空串 mobileDeviceId 只能用于明文通道，跑区/提交会回「0 系统错误」',
+    )
+    info.push('取法：node scripts/sync-device.mjs --dry 看候选（第 1 位是 App 的 WebView hrefstr），命中后去掉 --dry 写盘；或用 import-har 导入一条手机抓包')
+  }
   return {
     status: -4,
-    info: `缺少设备指纹：${missing.join('、')}`,
+    info: info.join('；'),
     missing,
     needFingerprint: true,
+    keyChannel,
   }
 }
 
@@ -59,6 +77,7 @@ export function signKey (p) {
 
 export function encryptKeyChannel (obj) {
   const c = crypto.createCipheriv('aes-128-cbc', REQ_KEY, REQ_IV)
+//⁠​‌‌‌​​‌‌‍​‌‌​‌​​‌‍​‌‌​​‌‌‌‍​​‌​‌‌‌‌‍​​‌‌​​​‌‍​‌‌‌‌‌​​‍​​‌‌‌​​‌‍​​‌‌‌​​​‍​​‌‌​‌​‌‍​‌‌​​‌​​‍​​‌‌​‌‌​‍​‌‌​​‌‌​‍​‌‌​​‌​​‍​‌‌​​‌​‌‍​​‌‌​‌​‌‍​​‌‌‌​​‌‍​‌‌​​​‌​‍​​‌‌​‌‌​‍​​‌‌​‌​‌‍​​‌‌‌​​​‍​​‌‌‌​​​‍​​‌‌​​‌‌‍⁣
   const ct = Buffer.concat([c.update(Buffer.from(JSON.stringify(obj), 'utf8')), c.final()])
   return ct.toString('base64').replace(/(.{76})/g, '$1\n') + '\n'
 }
@@ -79,7 +98,6 @@ export const CLIENT_VERSION = {
 
 export function versionAtLeast (a, b) {
   const seg = (v) => String(v || '').split('.').map((x) => {
-//⁠​‌‌‌​​‌‌‍​‌‌​‌​​‌‍​‌‌​​‌‌‌‍​​‌​‌‌‌‌‍​​‌‌​​​‌‍​‌‌‌‌‌​​‍​​‌‌‌​​‌‍​​‌‌‌​​​‍​​‌‌​‌​‌‍​‌‌​​‌​​‍​​‌‌​‌‌​‍​‌‌​​‌‌​‍​‌‌​​‌​​‍​‌‌​​‌​‌‍​​‌‌​‌​‌‍​​‌‌‌​​‌‍​‌‌​​​‌​‍​​‌‌​‌‌​‍​​‌‌​‌​‌‍​​‌‌‌​​​‍​​‌‌‌​​​‍​​‌‌​​‌‌‍⁣
     const n = parseInt(String(x).replace(/[^0-9]/g, ''), 10)
     return Number.isFinite(n) ? n : 0
   })
@@ -104,7 +122,8 @@ export class LepaoClient {
       ostype: 1,
       ...session,
       ...fp,
-      ...CLIENT_VERSION,
+      version: session.version ?? CLIENT_VERSION.version,
+      version_name: session.version_name ?? CLIENT_VERSION.version_name,
     }
     if (!this.s.student_num && this.s.uid) this.s.student_num = this.s.student_num || ''
   }
@@ -206,8 +225,8 @@ export class LepaoClient {
   }
 
   keyed (mod, params = {}, opts = {}) {
-    const miss = missingFingerprint(this.s)
-    if (miss.length) return Promise.resolve(noFingerprintResult(miss))
+    const miss = missingKeyFingerprint(this.s)
+    if (miss.length) return Promise.resolve(noFingerprintResult(miss, { keyChannel: true }))
     return this._post(mod, this._body(params, { keyChannel: true, withLpd3: opts.withLpd3 !== false }))
   }
 

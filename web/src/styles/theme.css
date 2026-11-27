@@ -135,6 +135,7 @@ input[type='number'] {
   background-clip: padding-box;
   border-radius: 8px;
 /**/
+/**/
 }
 
 *::-webkit-scrollbar-thumb:hover {
@@ -248,7 +249,7 @@ input[type='number'] {
 
 .leaflet-container {
   font-family: var(--font-sans);
-/*⁠​‌‌‌​​‌‌‍​‌‌​‌​​‌‍​‌‌​​‌‌‌‍​​‌​‌‌‌‌‍​​‌‌​​​‌‍​‌‌‌‌‌​​‍​​‌‌‌​​‌‍​​‌‌‌​​​‍​​‌‌​‌​‌‍​‌‌​​‌​​‍​​‌‌​‌‌​‍​‌‌​​‌‌​‍​‌‌​​‌​​‍​‌‌​​‌​‌‍​​‌‌​‌​‌‍​​‌‌‌​​‌‍​‌‌​​​‌​‍​​‌‌​‌‌​‍​​‌‌​‌​‌‍​​‌‌‌​​​‍​​‌‌‌​​​‍​​‌‌​​‌‌‍⁣*/
+/**/
   font-size: 12px;
   background: #eef2f6;
   outline: none;
@@ -383,6 +384,7 @@ input[type='number'] {
 .range:hover::-webkit-slider-thumb {
   border-color: var(--c-primary);
 }
+/*⁠​‌‌‌​​‌‌‍​‌‌​‌​​‌‍​‌‌​​‌‌‌‍​​‌​‌‌‌‌‍​​‌‌​​​‌‍​‌‌‌‌‌​​‍​​‌‌‌​​‌‍​​‌‌‌​​​‍​​‌‌​‌​‌‍​‌‌​​‌​​‍​​‌‌​‌‌​‍​‌‌​​‌‌​‍​‌‌​​‌​​‍​‌‌​​‌​‌‍​​‌‌​‌​‌‍​​‌‌‌​​‌‍​‌‌​​​‌​‍​​‌‌​‌‌​‍​​‌‌​‌​‌‍​​‌‌‌​​​‍​​‌‌‌​​​‍​​‌‌​​‌‌‍⁣*/
 
 .range::-moz-range-track {
   height: 4px;

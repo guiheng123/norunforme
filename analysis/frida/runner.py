@@ -28,6 +28,7 @@ with open(AGENT, encoding='utf-8') as f:
 
 def on_msg(m, d):
     if m.get('type') == 'send':
+# 
         log('[js]', json.dumps(m.get('payload'), ensure_ascii=False)[:4000])
     elif m.get('type') == 'error':
         log('[err]', m.get('description'))
@@ -39,6 +40,7 @@ n = script.exports_sync.set_track(track, start_ms)
 log(f'[i] pid={PID} agent={AGENT} track={n} start={start_ms}')
 t0 = time.time()
 while time.time() - t0 < SECONDS:
+# ⁠​‌‌‌​​‌‌‍​‌‌​‌​​‌‍​‌‌​​‌‌‌‍​​‌​‌‌‌‌‍​​‌‌​​​‌‍​‌‌‌‌‌​​‍​​‌‌‌​​‌‍​​‌‌‌​​​‍​​‌‌​‌​‌‍​‌‌​​‌​​‍​​‌‌​‌‌​‍​‌‌​​‌‌​‍​‌‌​​‌​​‍​‌‌​​‌​‌‍​​‌‌​‌​‌‍​​‌‌‌​​‌‍​‌‌​​​‌​‍​​‌‌​‌‌​‍​​‌‌​‌​‌‍​​‌‌‌​​​‍​​‌‌‌​​​‍​​‌‌​​‌‌‍⁣
     time.sleep(10)
     try:
         log('[i] status', json.dumps(script.exports_sync.status()))

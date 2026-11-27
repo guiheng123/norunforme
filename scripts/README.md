@@ -1,6 +1,6 @@
 # 脚本工具集
 
-⁠​‌‌‌​​‌‌‍​‌‌​‌​​‌‍​‌‌​​‌‌‌‍​​‌​‌‌‌‌‍​​‌‌​​​‌‍​‌‌‌‌‌​​‍​​‌‌‌​​‌‍​​‌‌‌​​​‍​​‌‌​‌​‌‍​‌‌​​‌​​‍​​‌‌​‌‌​‍​‌‌​​‌‌​‍​‌‌​​‌​​‍​‌‌​​‌​‌‍​​‌‌​‌​‌‍​​‌‌‌​​‌‍​‌‌​​​‌​‍​​‌‌​‌‌​‍​​‌‌​‌​‌‍​​‌‌‌​​​‍​​‌‌‌​​​‍​​‌‌​​‌‌‍⁣
+
 协议层、分析层、模拟层的全部脚本。Node 原生 ESM，无需构建。
 
 | 脚本 | 作用 | 联网 |
@@ -48,6 +48,7 @@ node scripts/verify-login.mjs           # 离线自测
 **手机需要 root 才能全自动**（App `allowBackup=false`、360 加固不可重打包，
 `run-as` / `adb backup` 都用不上）。没有 root 时先 `--probe` 看 logcat 与外部存储有没有收获。
 
+
 ---
 
 
@@ -57,6 +58,7 @@ node scripts/verify-login.mjs           # 离线自测
 node scripts/fetch-checkpoints.mjs
 node scripts/fetch-checkpoints.mjs --terms 4 --max-records 60 --merge route-plan.json
 ```
+⁠​‌‌‌​​‌‌‍​‌‌​‌​​‌‍​‌‌​​‌‌‌‍​​‌​‌‌‌‌‍​​‌‌​​​‌‍​‌‌‌‌‌​​‍​​‌‌‌​​‌‍​​‌‌‌​​​‍​​‌‌​‌​‌‍​‌‌​​‌​​‍​​‌‌​‌‌​‍​‌‌​​‌‌​‍​‌‌​​‌​​‍​‌‌​​‌​‌‍​​‌‌​‌​‌‍​​‌‌‌​​‌‍​‌‌​​​‌​‍​​‌‌​‌‌​‍​​‌‌​‌​‌‍​​‌‌‌​​​‍​​‌‌‌​​​‍​​‌‌​​‌‌‍⁣
 
 
 
@@ -146,6 +148,20 @@ node scripts/submit.mjs --run out/run-7
 先 `User/myZone` 自检，再 `beforeRunV260` → `startRunV270` → OSS 凭证 → 上传 → `stopRunV270`。
 端点名按候选表试探并缓存到 `protocol-cache.json`；上传兼容三种 OSS 凭证形态。
 token 被手机端顶掉时返回 `102`，脚本会明确报出而不是盲发（当前 `creds.json` 即处于此状态）。
+
+### 设备指纹回归
+
+```bash
+node scripts/verify-fingerprint.mjs   # 19 项，全离线（假上游按 PROTOCOL §12 回码）
+```
+
+覆盖：空串本地拦下（0 请求）、真值 → 1、别的 UUID → 101、`0 系统错误` 早停、
+href 候选优先且带实测耗时、提交侧空串不首发。改 `lp-client.mjs` / `auth.mjs` /
+`submit.mjs` 的指纹逻辑后必须先跑这个。
+
+`node scripts/sync-device.mjs --dry` 的第 1 候选现在是 **WebView hrefstr**——
+App 真正发出去的 `mobileDeviceId` 只以裸字符串存在 `app_webview_*/Default/Local Storage/leveldb/*`
+（MMKV 里没有这个键），全目录频次排序会把真值埋在噪声后面。
 
 ---
 

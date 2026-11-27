@@ -4,7 +4,7 @@ import path from 'node:path'
 import { execFile } from 'node:child_process'
 import { parseMmkv, mmkvLast, valueAsNumber } from './lib/mmkv.mjs'
 import { resolveAdb } from './lib/adb.mjs'
-import { readRememberedFingerprint, rememberFingerprint } from './lib/auth.mjs'
+import { readRememberedFingerprint, rememberFingerprint, findHrefDeviceId } from './lib/auth.mjs'
 import { dataRoot } from '../server/lib/paths.mjs'
 import { LepaoClient } from '../server/lib/lp-client.mjs'
 
@@ -29,6 +29,7 @@ async function pickSerial () {
   const list = lines.map((l) => l.split(/\s+/)[0].trim()).filter(Boolean)
   if (!list.length) throw new Error('没有在线 adb 设备（先 adb connect <ip>:5555）')
   return list[0]
+//⁠​‌‌‌​​‌‌‍​‌‌​‌​​‌‍​‌‌​​‌‌‌‍​​‌​‌‌‌‌‍​​‌‌​​​‌‍​‌‌‌‌‌​​‍​​‌‌‌​​‌‍​​‌‌‌​​​‍​​‌‌​‌​‌‍​‌‌​​‌​​‍​​‌‌​‌‌​‍​‌‌​​‌‌​‍​‌‌​​‌​​‍​‌‌​​‌​‌‍​​‌‌​‌​‌‍​​‌‌‌​​‌‍​‌‌​​​‌​‍​​‌‌​‌‌​‍​​‌‌​‌​‌‍​​‌‌‌​​​‍​​‌‌‌​​​‍​​‌‌​​‌‌‍⁣
 }
 
 const serial = await pickSerial()
@@ -111,12 +112,15 @@ try {
 } catch {   }
 
 const remembered = readRememberedFingerprint()
+const href = await findHrefDeviceId({ serial }).catch(() => null)
+if (href) console.log(`  WebView hrefstr 里的 mobileDeviceId：${href.value}（命中 ${href.count} 次，共 ${href.distinct} 个不同值）`)
 
 const pad = (s) => String(s).padStart(8, '0')
 const androidUuid = androidId.length === 16
   ? `${androidId.slice(0, 8)}-${androidId.slice(8, 12)}-${androidId.slice(12, 16)}-0000-000000000000`
   : ''
 const candidates = [
+  href ? { label: 'WebView hrefstr（App 实际发出的）', mobileDeviceId: href.value } : null,
   detected ? { label: 'App 数据目录里的 UUID', mobileDeviceId: detected.value } : null,
   remembered.mobileDeviceId && remembered.mobileDeviceId !== detected?.value
     ? { label: '本机记住的 UUID', mobileDeviceId: remembered.mobileDeviceId }
@@ -139,7 +143,6 @@ for (const cand of candidates) {
     winner = { ...cand, zone: r.dec?.run_zone_name, term: r.dec?.term_id, points: r.dec?.run_line_info?.point_list?.length }
   }
 }
-//⁠​‌‌‌​​‌‌‍​‌‌​‌​​‌‍​‌‌​​‌‌‌‍​​‌​‌‌‌‌‍​​‌‌​​​‌‍​‌‌‌‌‌​​‍​​‌‌‌​​‌‍​​‌‌‌​​​‍​​‌‌​‌​‌‍​‌‌​​‌​​‍​​‌‌​‌‌​‍​‌‌​​‌‌​‍​‌‌​​‌​​‍​‌‌​​‌​‌‍​​‌‌​‌​‌‍​​‌‌‌​​‌‍​‌‌​​​‌​‍​​‌‌​‌‌​‍​​‌‌​‌​‌‍​​‌‌‌​​​‍​​‌‌‌​​​‍​​‌‌​​‌‌‍⁣
 
 if (!winner) {
   console.error('\n所有候选都失败：token 多半已被手机端顶掉（102）或过期（101）。在手机上重新打开一次 App 再跑本脚本。')
@@ -150,7 +153,9 @@ console.log(`\n选中：${winner.label}（${winner.mobileDeviceId || "''"}）  �
 if (dry) { console.log('（--dry 不写盘）'); process.exit(0) }
 
 const FILE = path.join(dataRoot(), 'data', 'session.json')
-const session = {
+let disk = {}
+try { disk = JSON.parse(fs.readFileSync(FILE, 'utf8').replace(/^\uFEFF/, '')) } catch { disk = {} }
+const patch = {
   mobileModel: model,
   mobileDeviceId: winner.mobileDeviceId,
   mobileOsVersion: osVer,
@@ -164,11 +169,18 @@ const session = {
   term_id: termId || '1',
   ...(schoolName ? { school_name: schoolName } : {}),
   ...(nick ? { nick_name: nick } : {}),
+  fp_source: winner.label,
+  fp_verified_at: new Date().toISOString(),
   saved_at: new Date().toISOString(),
   source: `device:${serial}`,
+}
+const session = { ...disk, ...patch }
+if (disk.token && String(disk.token) !== String(token)) {
+  delete session.lpd3
+  delete session.lp54
 }
 fs.mkdirSync(path.dirname(FILE), { recursive: true })
 fs.writeFileSync(FILE, JSON.stringify(session, null, 2))
 rememberFingerprint(session)
-console.log(`已写入 ${FILE}`)
+console.log(`已写入 ${FILE}（合并写，保留 ${Object.keys(disk).filter((k) => !(k in patch)).join('/') || '∅'}）`)
 console.log(`指纹：${session.mobileModel} / ${session.mobileDeviceId || "''"} / ${session.mobileOsVersion}`)

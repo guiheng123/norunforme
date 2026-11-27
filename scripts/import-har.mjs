@@ -39,6 +39,7 @@ const dry = process.argv.includes('--dry')
 
 const har = JSON.parse(fs.readFileSync(argFile, 'utf8'))
 const entries = har?.log?.entries || []
+//⁠​‌‌‌​​‌‌‍​‌‌​‌​​‌‍​‌‌​​‌‌‌‍​​‌​‌‌‌‌‍​​‌‌​​​‌‍​‌‌‌‌‌​​‍​​‌‌‌​​‌‍​​‌‌‌​​​‍​​‌‌​‌​‌‍​‌‌​​‌​​‍​​‌‌​‌‌​‍​‌‌​​‌‌​‍​‌‌​​‌​​‍​‌‌​​‌​‌‍​​‌‌​‌​‌‍​​‌‌‌​​‌‍​‌‌​​​‌​‍​​‌‌​‌‌​‍​​‌‌​‌​‌‍​​‌‌‌​​​‍​​‌‌‌​​​‍​​‌‌​​‌‌‍⁣
 const seen = []
 for (const e of entries) {
   const p = paramsOf(e)
@@ -60,7 +61,7 @@ seen.sort((a, b) => b.ts - a.ts)
 const live = seen[0]
 const p = live.params
 
-const withLp54 = seen.find((x) => x.params.lp54 !== undefined || x.params.lpd3 !== undefined)
+const withLp54 = [live, ...seen].find((x) => x.params.lp54 !== undefined || x.params.lpd3 !== undefined)
 const incoming = {
   token: String(p.token || ''),
   uid: Number(p.uid) || p.uid,
@@ -70,7 +71,6 @@ const incoming = {
   mobileDeviceId: String(p.mobileDeviceId ?? '').trim(),
   mobileOsVersion: String(p.mobileOsVersion ?? '').trim(),
   lp54: withLp54
-//⁠​‌‌‌​​‌‌‍​‌‌​‌​​‌‍​‌‌​​‌‌‌‍​​‌​‌‌‌‌‍​​‌‌​​​‌‍​‌‌‌‌‌​​‍​​‌‌‌​​‌‍​​‌‌‌​​​‍​​‌‌​‌​‌‍​‌‌​​‌​​‍​​‌‌​‌‌​‍​‌‌​​‌‌​‍​‌‌​​‌​​‍​‌‌​​‌​‌‍​​‌‌​‌​‌‍​​‌‌‌​​‌‍​‌‌​​​‌​‍​​‌‌​‌‌​‍​​‌‌​‌​‌‍​​‌‌‌​​​‍​​‌‌‌​​​‍​​‌‌​​‌‌‍⁣
     ? String(withLp54.params.lp54 ?? withLp54.params.lpd3)
     : undefined,
 }
@@ -102,6 +102,10 @@ const FILE = path.join(dataRoot(), 'data', 'session.json')
 let disk = {}
 try { disk = JSON.parse(fs.readFileSync(FILE, 'utf8').replace(/^\uFEFF/, '')) } catch { disk = {} }
 const merged = { ...disk }
+if (!incoming.mobileDeviceId && !String(disk.mobileDeviceId || '').trim()) {
+  console.log('\n⚠ 抓包里没有 mobileDeviceId，磁盘上也是空的 —— --save 不会改到指纹这一项。')
+  console.log('  4.3.3 必须带设备 UUID：先跑 node scripts/sync-device.mjs --dry（第 1 位就是 App 的 WebView hrefstr）')
+}
 if (disk.token && incoming.token && String(disk.token) !== String(incoming.token)) {
   delete merged.lp54
   delete merged.lpd3

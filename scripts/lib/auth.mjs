@@ -43,7 +43,6 @@ export function hasFingerprint(s) {
   return Boolean(
     s &&
       String(s.mobileModel ?? '').trim() &&
-//⁠​‌‌‌​​‌‌‍​‌‌​‌​​‌‍​‌‌​​‌‌‌‍​​‌​‌‌‌‌‍​​‌‌​​​‌‍​‌‌‌‌‌​​‍​​‌‌‌​​‌‍​​‌‌‌​​​‍​​‌‌​‌​‌‍​‌‌​​‌​​‍​​‌‌​‌‌​‍​‌‌​​‌‌​‍​‌‌​​‌​​‍​‌‌​​‌​‌‍​​‌‌​‌​‌‍​​‌‌‌​​‌‍​‌‌​​​‌​‍​​‌‌​‌‌​‍​​‌‌​‌​‌‍​​‌‌‌​​​‍​​‌‌‌​​​‍​​‌‌​​‌‌‍⁣
       String(s.mobileOsVersion ?? '').trim() &&
       s.mobileDeviceId !== undefined &&
       s.mobileDeviceId !== null,
@@ -72,6 +71,7 @@ export function normalizeSession(s) {
     school_id: Number(s?.school_id) || 0,
     student_num: s?.student_num == null ? '' : String(s.student_num),
   }
+//⁠​‌‌‌​​‌‌‍​‌‌​‌​​‌‍​‌‌​​‌‌‌‍​​‌​‌‌‌‌‍​​‌‌​​​‌‍​‌‌‌‌‌​​‍​​‌‌‌​​‌‍​​‌‌‌​​​‍​​‌‌​‌​‌‍​‌‌​​‌​​‍​​‌‌​‌‌​‍​‌‌​​‌‌​‍​‌‌​​‌​​‍​‌‌​​‌​‌‍​​‌‌​‌​‌‍​​‌‌‌​​‌‍​‌‌​​​‌​‍​​‌‌​‌‌​‍​​‌‌​‌​‌‍​​‌‌‌​​​‍​​‌‌‌​​​‍​​‌‌​​‌‌‍⁣
 }
 
 function pickFingerprint(s) {
@@ -126,33 +126,92 @@ export function androidIdToUuid(androidId) {
   return `${v.slice(0, 8)}-${v.slice(8, 12)}-${v.slice(12, 16)}-0000-000000000000`
 }
 
-export function deviceIdCandidates({ session, cands, info, extra } = {}) {
+export function deviceIdCandidates({ session, cands, info, extra, allowEmpty = true, allowZero = true } = {}) {
   const out = []
   const seen = new Set()
-  const add = (raw, why, { allowZero = false, allowEmpty = false } = {}) => {
+  const add = (raw, why, { zero = allowZero, empty = allowEmpty } = {}) => {
     if (raw === undefined || raw === null) return
     const v = String(raw).trim()
-    if (!v && !allowEmpty) return
+    if (!v && !empty) return
     if (v && !ANY_UUID_RE.test(v) && !ANDROID_ID_RE.test(v)) return
-    if (v === ZERO_DEVICE_ID && !allowZero) return
+    if (v === ZERO_DEVICE_ID && !zero) return
     const key = v.toLowerCase()
     if (seen.has(key)) return
     seen.add(key)
     out.push({ value: v, why })
   }
-  add(normalizeSession(session || {}).mobileDeviceId, '会话里已有的值', { allowEmpty: true })
-  for (const d of cands?.deviceIds ?? []) add(d?.value, 'App 数据里扫到的')
+  const href = cands?.href?.value ? String(cands.href.value).trim().toLowerCase() : ''
+  const markVerified = () => {
+    if (!href) return
+    for (const c of out) if (c.value.trim().toLowerCase() === href) c.verified = true
+  }
+
+  add(normalizeSession(session || {}).mobileDeviceId, '会话里已有的值', { empty: true })
+  add(cands?.href?.value, 'WebView hrefstr（App 实际发出的）')
+  for (const d of cands?.deviceIds ?? []) add(d?.value, d?.verified ? 'App 数据里扫到的（紧挨 mobileDeviceId= 命中）' : 'App 数据里扫到的')
   for (const f of [].concat(extra || [])) {
     add(f && typeof f === 'object' ? f.mobileDeviceId : f, '外部给定')
   }
   add(readRememberedFingerprint().mobileDeviceId, '本机记住的值')
-  add('', '空串（老版本 App 形态）', { allowEmpty: true })
+  add('', '空串（4.2.x 老版本 App 形态）', { empty: true })
   add(androidIdToUuid(info?.androidId), 'android_id 推出的 UUID 形态')
-  add(ZERO_DEVICE_ID, '固定 UUID 兜底', { allowZero: true })
+  add(ZERO_DEVICE_ID, '固定 UUID 兜底', { zero: true })
+  markVerified()
   return out
 }
 
+export function parseHrefDeviceIds (text) {
+  const hits = []
+  for (const m of String(text || '').matchAll(new RegExp(`mobileDeviceId=(${UUID_GREP})`, 'gi'))) {
+    const v = m[1].toLowerCase()
+    if (v === ZERO_DEVICE_ID) continue
+    hits.push(v)
+  }
+  return hits
+}
+
+export async function findHrefDeviceId({ adb, serial, timeout = 25000 } = {}) {
+  const base = `/data/data/${PKG}`
+  const dirs = [
+    `${base}/app_webview*/Default/Local\\ Storage/leveldb/*`,
+    `${base}/app_webview*/Default/Session\\ Storage/*`,
+    `${base}/app_webview*/Default/HTTP\\ Cache/Cache_Data/*`,
+  ].join(' ')
+  const attempts = [
+    `grep -ahoE "mobileDeviceId=${UUID_GREP}" ${dirs} 2>/dev/null | tail -40`,
+    `cat ${dirs} 2>/dev/null | tr -d '\\000' | grep -aoE "mobileDeviceId=${UUID_GREP}" | tail -40`,
+    `cat ${dirs} 2>/dev/null | tr -d '\\000' | grep -oE "mobileDeviceId=${UUID_GREP}" | tail -40`,
+  ]
+  let hits = []
+  for (const inner of attempts) {
+    const r = await shellRoot(inner, { adb, serial, timeout })
+    hits = parseHrefDeviceIds(r.stdout)
+    if (hits.length) break
+  }
+  if (!hits.length) return null
+  const last = hits[hits.length - 1]
+  return {
+    value: last,
+    count: hits.filter((x) => x === last).length,
+    distinct: [...new Set(hits)].length,
+    source: 'webview-hrefstr',
+  }
+}
+
 const uuidScanCache = new Map()
+
+export async function ensureHrefDeviceId({ adb, serial, kick = false, waitMs = 6000 } = {}) {
+  let href = await findHrefDeviceId({ adb, serial }).catch(() => null)
+  if (href || !kick) return href
+  const launched = await launchApp({ adb, serial }).catch(() => null)
+  const deadline = Date.now() + waitMs
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 1200))
+    href = await findHrefDeviceId({ adb, serial }).catch(() => null)
+    if (href) return { ...href, kicked: !!launched?.ok }
+  }
+  return null
+}
 
 export async function findAppUuids({ adb, serial, refresh = false } = {}) {
   const cacheKey = String(serial || process.env.LP_ADB_DEVICE || '-')
@@ -194,13 +253,15 @@ export async function findAppUuids({ adb, serial, refresh = false } = {}) {
     })
     collect(viaRunAs.stdout)
   }
+  const href = await findHrefDeviceId({ adb, serial }).catch(() => null)
+  if (href) for (const row of rows) row.verified = row.value === href.value
   const sorted = sortByHits(rows)
-  uuidScanCache.set(cacheKey, { at: Date.now(), rows: sorted })
+  uuidScanCache.set(cacheKey, { at: Date.now(), rows: sorted, href })
   return sorted
 }
 
 function sortByHits(rows) {
-  return [...rows].sort((a, b) => b.hits - a.hits)
+  return [...rows].sort((a, b) => Number(Boolean(b.verified)) - Number(Boolean(a.verified)) || b.hits - a.hits)
 }
 
 function fingerprintVariants(session, extra = []) {
@@ -237,28 +298,47 @@ export async function tryKeyedFingerprint(session, mobileDeviceId, { mod = 'Run2
   }
 }
 
-export async function repairKeyedFingerprint(session, { extra = [], scan = true, mod = 'Run2/beforeRunV260' } = {}) {
+const DEVICE_ID_HINT = '用 node scripts/sync-device.mjs --dry 先看候选（第 1 位就是 App 的 WebView hrefstr），命中后去掉 --dry 写盘'
+
+export async function repairKeyedFingerprint(
+  session,
+  { extra = [], scan = true, mod = 'Run2/beforeRunV260', serial, hrefDeviceId, allowEmpty = false, maxProbes = 10 } = {},
+) {
   const s = normalizeSession(session)
   let scanned = []
+  let href = hrefDeviceId ? { value: String(hrefDeviceId).trim(), source: 'explicit' } : null
   if (scan) {
-    const uuids = await findAppUuids({}).catch(() => [])
-    if (uuids.length) scanned = uuids.map((u) => ({ value: u.value }))
+    const dev = serial || (await pickDevice({}).catch(() => null))
+    if (!href) href = await findHrefDeviceId({ serial: dev }).catch(() => null)
+    const uuids = await findAppUuids({ serial: dev }).catch(() => [])
+    if (uuids.length) scanned = uuids.map((u) => ({ value: u.value, verified: !!u.verified }))
   }
-  const ids = deviceIdCandidates({ session: s, cands: { deviceIds: scanned }, extra })
+  const ids = deviceIdCandidates({ session: s, cands: { deviceIds: scanned, href }, extra, allowEmpty }).filter(
+    (c) => allowEmpty || absentDeviceId(c.value) === false,
+  )
+  const ordered = [...ids.filter((c) => c.verified), ...ids.filter((c) => !c.verified)].slice(0, maxProbes)
   const tried = []
-  for (const c of ids.slice(0, 10)) {
+  for (const c of ordered) {
+    const t0 = Date.now()
     const r = await tryKeyedFingerprint(s, c.value, { mod })
-    tried.push({ value: c.value, status: r.status, why: c.why })
+    tried.push({ value: c.value, status: r.status, why: c.why, verified: !!c.verified, ms: Date.now() - t0, info: r.info })
     if (r.ok) {
       rememberFingerprint(r.session)
-      return { ok: true, session: r.session, mobileDeviceId: c.value, tried, status: r.status }
+      return { ok: true, session: r.session, mobileDeviceId: c.value, tried, status: r.status, href }
     }
-    if (r.status === 102) break
+    if (r.status === 0 || r.status === 102 || r.status === -4) break
   }
-  return { ok: false, tried, status: tried.at(-1)?.status ?? -1 }
+  return {
+    ok: false,
+    tried,
+    status: tried.at(-1)?.status ?? -1,
+    href,
+    info: tried.at(-1)?.info ?? '',
+    hint: tried.length ? DEVICE_ID_HINT : '没有可用候选：设备上还没出现过 mobileDeviceId（App/H5 至少发过一次请求），或没有 adb 设备',
+  }
 }
 
-export async function verifySession(session, { retryFingerprint = true, fingerprints, deviceIds, keyedOracle = false } = {}) {
+export async function verifySession(session, { retryFingerprint = true, fingerprints, deviceIds, keyedOracle = false, allowEmptyDeviceId = false } = {}) {
   const s0 = normalizeSession(session)
   const miss = missingFingerprint(s0)
   const hard = miss.filter((k) => !k.startsWith('mobileDeviceId'))
@@ -331,6 +411,18 @@ export async function verifySession(session, { retryFingerprint = true, fingerpr
 
   if (plainHit) {
     if (plan.length > 1) probeMiss.set(probeKey, Date.now())
+    if (!allowEmptyDeviceId) {
+      return {
+        ok: false,
+        status: -4,
+        needFingerprint: true,
+        missing: ['mobileDeviceId'],
+        keyVerified: false,
+        info: '明文接口可读，但 key= 通道没过：真机 mobileDeviceId 缺失或与 token 不配套（4.3.3 上空串必回「0 系统错误」）',
+        session: plainHit,
+        via: plainHit.why,
+      }
+    }
     return {
       ok: true,
       status: 1,
@@ -868,6 +960,12 @@ export async function loginFromDevice(opts = {}) {
   }
 
   const remembered = readRememberedFingerprint()
+  const href = await ensureHrefDeviceId({
+    adb: opts.adb,
+    serial: device?.serial || opts.serial,
+    kick: opts.kick !== false,
+  }).catch(() => null)
+  if (href) trace.push(`hrefstr：mobileDeviceId=${href.value}${href.kicked ? '（启动 App 后出现）' : ''}`)
   const appDeviceId = (cands.deviceIds ?? [])
     .map((d) => String(d.value))
     .find((v) => ANY_UUID_RE.test(v) || ANDROID_ID_RE.test(v)) || ''
@@ -886,7 +984,7 @@ export async function loginFromDevice(opts = {}) {
     school_id: schoolId,
     student_num: studentNum,
     mobileModel: firstNonEmpty(fpGiven.mobileModel, info?.mobileModel, remembered.mobileModel) ?? '',
-    mobileDeviceId: firstNonEmpty(fpGiven.mobileDeviceId, appDeviceId, remembered.mobileDeviceId) ?? '',
+    mobileDeviceId: firstNonEmpty(fpGiven.mobileDeviceId, href?.value, appDeviceId, remembered.mobileDeviceId) ?? '',
     mobileOsVersion: firstNonEmpty(fpGiven.mobileOsVersion, info?.mobileOsVersion, remembered.mobileOsVersion) ?? '',
     ...(firstNonEmpty(info?.buildId, remembered.buildId) ? { buildId: firstNonEmpty(info?.buildId, remembered.buildId) } : {}),
     refresh_token: cands.refreshes[0]?.value || undefined,
@@ -915,7 +1013,7 @@ export async function loginFromDevice(opts = {}) {
 
   const idCandidates = deviceIdCandidates({
     session,
-    cands,
+    cands: { ...cands, href },
     info,
     extra: [fpGiven.mobileDeviceId, remembered.mobileDeviceId, ...(opts.fingerprints ? [].concat(opts.fingerprints) : [])],
   }).map((c) => c.value)
@@ -925,6 +1023,7 @@ export async function loginFromDevice(opts = {}) {
       fingerprints: altFps,
       deviceIds: idCandidates,
       keyedOracle: opts.keyed !== false,
+      allowEmptyDeviceId: opts.allowEmptyDevice === true,
     })
     const fp = v.session
       ? `${v.session.mobileModel}/${v.session.mobileDeviceId || '-'}/a${v.session.mobileOsVersion}`

@@ -1,8 +1,23 @@
+# ── 依赖与构建产物（本机生成，不入库）─────────────────────────
 node_modules/
 dist/
 build/.work/
 *.tsbuildinfo
+.vite/
+.cache/
+
+# ── 构建输出与签名 ─────────────────────────────────────────────
 *.exe
+!tools/platform-tools/*.exe
+.lepao-sig.json
+
+# ── 打包依赖：analysis/ 与 tools/platform-tools/ 必须入库 ───────
+# build/make-exe.mjs 会把下面这些内嵌进 exe，并随包复制到 exe 同级目录：
+#   analysis/frida/runner.py、analysis/frida/amap3.js、analysis/feed.sh
+#   platform-tools/adb.exe、AdbWinApi.dll、AdbWinUsbApi.dll（另附 sqlite3/fastboot 等整包）
+# 所以这两个目录不做忽略；platform-tools 里的 *.dll 也一并入库（已去掉 *.dll 规则）。
+
+# ── 运行时数据与凭据（含 token / 学号 / 设备指纹，绝不能入库）───
 data/*
 !data/.gitkeep
 creds.json
@@ -12,6 +27,8 @@ route-plan.json
 run-analysis.json
 protocol-cache.json
 *.har
+
+# ── 文档与编辑器杂项 ───────────────────────────────────────────
 docs/
 .vscode/
 .idea/
@@ -19,5 +36,6 @@ docs/
 Thumbs.db
 desktop.ini
 .local/
+
+# ── 签名流水 ───────────────────────────────────────────────────
 .attest.log.jsonl
-.lepao-sig.json

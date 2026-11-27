@@ -769,7 +769,7 @@ const routes: Array<{ method: string; pattern: RegExp; handler: Handler }> = [
   {
     method: 'GET',
     pattern: /^\/api\/health$/,
-    handler: () => ({ ok: true, version: '1.0.0-demo' }) as HealthInfo,
+    handler: () => ({ ok: true, version: '1.3.0-demo' }) as HealthInfo,
   },
 ]
 

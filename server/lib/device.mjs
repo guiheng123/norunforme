@@ -332,7 +332,6 @@ export async function startRun (points, startAt) {
     job.log.push(`frida attach pid=${fr.appPid}`)
   } else {
     const list = pts.map((p) => `${Number(p.a).toFixed(6)},${Number(p.o).toFixed(6)}`).join('\n') + '\n'
-//⁠​‌‌‌​​‌‌‍​‌‌​‌​​‌‍​‌‌​​‌‌‌‍​​‌​‌‌‌‌‍​​‌‌​​​‌‍​‌‌‌‌‌​​‍​​‌‌‌​​‌‍​​‌‌‌​​​‍​​‌‌​‌​‌‍​‌‌​​‌​​‍​​‌‌​‌‌​‍​‌‌​​‌‌​‍​‌‌​​‌​​‍​‌‌​​‌​‌‍​​‌‌​‌​‌‍​​‌‌‌​​‌‍​‌‌​​​‌​‍​​‌‌​‌‌​‍​​‌‌​‌​‌‍​​‌‌‌​​​‍​​‌‌‌​​​‍​​‌‌​​‌‌‍⁣
     const local = path.join(TMP, `${id}.txt`)
     fs.writeFileSync(local, list)
     await adb(['push', local, '/data/local/tmp/track.txt'], 20000, s)
@@ -375,6 +374,7 @@ export function pollRun (id) {
 export async function stopRun (id) {
   const job = runs.get(id)
   if (!job) return false
+//⁠​‌‌‌​​‌‌‍​‌‌​‌​​‌‍​‌‌​​‌‌‌‍​​‌​‌‌‌‌‍​​‌‌​​​‌‍​‌‌‌‌‌​​‍​​‌‌‌​​‌‍​​‌‌‌​​​‍​​‌‌​‌​‌‍​‌‌​​‌​​‍​​‌‌​‌‌​‍​‌‌​​‌‌​‍​‌‌​​‌​​‍​‌‌​​‌​‌‍​​‌‌​‌​‌‍​​‌‌‌​​‌‍​‌‌​​​‌​‍​​‌‌​‌‌​‍​​‌‌​‌​‌‍​​‌‌‌​​​‍​​‌‌‌​​​‍​​‌‌​​‌‌‍⁣
   job.state = 'stopped'
   try { clearInterval(job.timer) } catch {   }
   if (job.proc) {
